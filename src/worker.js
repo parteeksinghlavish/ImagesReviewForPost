@@ -1,4 +1,6 @@
 
+import { reviewDecision, maintenance, queueStats } from "./operations.js";
+import { LIVE_POSTING_ENABLED } from "./queue.js";
 const HOME = "review.titanrigs.com";
 // Owner identity is injected as the Cloudflare OWNER_EMAIL runtime secret.
 const securityHeaders = {
@@ -105,8 +107,8 @@ async function sync(env) {
   if (all.length) for(let i=0;i<all.length;i+=100) await env.DB.batch(all.slice(i,i+100));
 }
 async function stats(env) {
- const r=await env.DB.prepare("SELECT status, count(*) n FROM image_reviews GROUP BY status").all();
- const out={}; for (const x of r.results||[]) out[x.status]=x.n;return out;
+ const s=await queueStats(env);
+ return {...s.reviews,error:(s.reviews.error||0)+s.cleanup_failures+(s.publication.failed||0)+(s.publication.uncertain||0)};
 }
 export default {
  async fetch(req,env) {
@@ -119,13 +121,26 @@ export default {
    if(req.method==="GET"&&path==="/")return new Response(page(),{headers:{...securityHeaders,"Content-Type":"text/html; charset=utf-8","Content-Security-Policy":"default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'"}});
    if(req.method==="GET"&&path==="/manifest.webmanifest")return json({name:"Social Studio Review",short_name:"Image Review",start_url:"/",display:"standalone",background_color:"#090a0d",theme_color:"#090a0d",icons:[{src:"/icon.svg",type:"image/svg+xml",sizes:"any",purpose:"any"}]});
    if(req.method==="GET"&&path==="/icon.svg")return new Response('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#171a23"/><path d="m64 22 12 30 30 12-30 12-12 30-12-30-30-12 30-12Z" fill="#abb4fa"/></svg>',{headers:{...securityHeaders,"Content-Type":"image/svg+xml"}});
-   if(req.method==="GET"&&path==="/api/health")return json({ok:true,project:"social-image-review",publishing_enabled:false});
+   if(req.method==="GET"&&path==="/api/health")return json({ok:true,project:"social-image-review",publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only"});
    if(req.method==="GET"&&path==="/api/items") {
     await sync(env);
     const status=u.searchParams.get("status")||"pending";
     if(!["pending","approved","rejected","scheduling","scheduled","published","error"].includes(status))return json({error:"Invalid status"},400);
-    const items=await env.DB.prepare("SELECT id,object_key,batch_id,image_index,status,created_at,decided_at,scheduled_at,postiz_post_id,last_error FROM image_reviews WHERE status=? ORDER BY created_at ASC,image_index ASC LIMIT 200").bind(status).all();
-    return json({items:items.results||[],stats:await stats(env),publishing_enabled:false});
+    const filter=status==="error" ? "(i.status='error' OR c.status='failed' OR j.status IN ('failed','uncertain'))" : "i.status=?";
+    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,j.publish_at AS planned_at,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error FROM image_reviews i LEFT JOIN publication_jobs j ON j.image_id=i.id LEFT JOIN cleanup_jobs c ON c.image_id=i.id WHERE "+filter+" ORDER BY i.created_at ASC,i.image_index ASC LIMIT 200";
+    const stmt=env.DB.prepare(sql);
+    const items=status==="error" ? await stmt.all() : await stmt.bind(status).all();
+    return json({items:items.results||[],stats:await stats(env),publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only"});
+   }
+   if(req.method==="GET"&&path==="/api/jobs") {
+    const r=await env.DB.prepare("SELECT j.image_id,j.publish_at,j.status,j.attempts,j.next_attempt_at,j.postiz_post_id,j.provider_status,j.last_error,j.created_at,i.batch_id,i.image_index FROM publication_jobs j JOIN image_reviews i ON i.id=j.image_id ORDER BY j.publish_at ASC LIMIT 200").all();
+    return json({jobs:r.results||[],publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only"});
+   }
+   if(req.method==="GET"&&path==="/api/events") {
+    const id=u.searchParams.get("id")||"";
+    if(!/^[A-Za-z0-9_-]{8,80}-[0-3]$/.test(id))return json({error:"Image ID required"},400);
+    const r=await env.DB.prepare("SELECT event,detail,created_at FROM review_events WHERE image_id=? ORDER BY id DESC LIMIT 100").bind(id).all();
+    return json({events:r.results||[]});
    }
    if(req.method==="GET"&&path.startsWith("/media/")){
     const key=decodeURIComponent(path.substring(7));
@@ -139,17 +154,18 @@ export default {
    if(req.method==="POST"&&path==="/api/decision"){
     if(req.headers.get("Origin")!=="https://"+HOME)return json({error:"Origin not allowed"},403);
     if(!String(req.headers.get("Content-Type")||"").startsWith("application/json"))return json({error:"JSON required"},415);
-    const len=Number(req.headers.get("Content-Length")||0);if(len>1024)return json({error:"Body too large"},413);
-    const {id,decision}=await req.json();
-    if(typeof id!=="string"||id.length>100||!["approved","rejected"].includes(decision))return json({error:"Invalid decision"},400);
-    const record=await env.DB.prepare("UPDATE image_reviews SET status=?,decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='pending' RETURNING id,object_key,status").bind(decision,id).first();
-    if(!record)return json({error:"This image has already been reviewed; refresh the queue"},409);
-    if(decision==="rejected"){
-     try{await env.PENDING.delete(record.object_key)}catch(e){await env.DB.prepare("UPDATE image_reviews SET status='error',last_error=? WHERE id=?").bind("R2 deletion failed",id).run();return json({error:"Rejected, but R2 cleanup needs retry"},503)}
-    }
-    return json({id,status:decision,scheduled:false});
+    if(Number(req.headers.get("Content-Length")||0)>1024)return json({error:"Body too large"},413);
+    const raw=await req.text();
+    if(raw.length>1024)return json({error:"Body too large"},413);
+    let payload;try{payload=JSON.parse(raw)}catch{return json({error:"Invalid JSON"},400)}
+    try{return json(await reviewDecision(env,payload?.id,payload?.decision))}
+    catch(error){if(error?.status===409||error?.status===400)return json({error:error.message},error.status);throw error}
    }
    return json({error:"Not found"},404);
   } catch(e){return json({error:"Request failed",details:String(e).slice(0,140)},500)}
+ },
+ async scheduled(controller,env,ctx) {
+  // Periodic cleanup only. Never dispatch held posts to Postiz/Instagram.
+  ctx.waitUntil(maintenance(env).then(result=>console.log("review cleanup",JSON.stringify(result))).catch(e=>console.error("review cleanup failed",String(e))));
  }
 };
