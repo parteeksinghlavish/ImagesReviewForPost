@@ -42,3 +42,16 @@ CREATE TABLE IF NOT EXISTS review_events (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS ix_review_events_image ON review_events(image_id,created_at);
+
+-- Test-only Postiz simulation receipts. This never changes real publication_jobs.
+CREATE TABLE IF NOT EXISTS publication_simulations (
+  image_id TEXT PRIMARY KEY REFERENCES image_reviews(id),
+  status TEXT NOT NULL CHECK(status IN('simulated_scheduled','simulated_published','simulated_failed','simulated_uncertain')),
+  publish_at TEXT NOT NULL,
+  mock_upload_id TEXT NOT NULL,
+  mock_post_id TEXT NOT NULL UNIQUE,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS ix_publication_simulations_status ON publication_simulations(status,updated_at);

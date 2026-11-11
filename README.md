@@ -67,3 +67,13 @@ Cloudflare Workers Builds is connected to the `main` branch. Changes committed t
 1. Implement a gated, authenticated publisher that downloads the approved private image, uploads it to Postiz, creates exactly one scheduled single-image post and atomically stores the provider receipt. Never publish on approval alone while the lock is off.
 2. Implement Postiz status polling and safe reconciliation for scheduled/published/failed/uncertain results; uncertain outcomes must never automatically resend.
 3. Test the entire pipeline with non-publishing fixtures, then explicitly obtain the owner's authorization before enabling any live Postiz schedule or Instagram publication.
+
+## Dry-run Postiz workflow (safe to test)
+
+Every approved image retains its real `publication_jobs.status = held` record. Open the approved card in the review app, choose **Dry-run single post**, and the Worker reads its private R2 JPEG, fabricates a Postiz upload receipt, validates the **one-image** schedule payload, and records it in the separate `publication_simulations` table. **No HTTP request to Postiz or Instagram occurs.** Repeating the operation is idempotent.
+
+Use **Simulate published / failed / uncertain** to exercise reconciliation. Uncertain outcomes can be resolved through status changes only; no automatic resend is possible. Real held jobs and their `postiz_post_id` remain unchanged.
+
+`GET /api/simulations` lists dry-run results, and `POST /api/dry-run` accepts owner-authenticated, same-origin JSON `{id,action}`, with actions `prepare`, `published`, `failed`, `uncertain` or `verified_scheduled`. These are simulations, **not actual Instagram results**.
+
+The strict `LIVE_POSTING_ENABLED=false` guard remains in place. Future real Postiz upload and schedule adapters, status polling and uncertain-result recovery require a separate reviewed integration and explicit permission to activate publishing.

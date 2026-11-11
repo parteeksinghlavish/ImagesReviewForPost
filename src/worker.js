@@ -2,6 +2,7 @@
 import { reviewDecision, maintenance, queueStats, retryFailedCleanup } from "./operations.js";
 import { LIVE_POSTING_ENABLED } from "./queue.js";
 import { reconcileHeldManifests } from "./manifest.js";
+import { dryRunAction } from "./dry-run.js";
 const HOME = "review.titanrigs.com";
 // Owner identity is injected as the Cloudflare OWNER_EMAIL runtime secret.
 const securityHeaders = {
@@ -133,13 +134,13 @@ export default {
    if(req.method==="GET"&&path==="/")return new Response(page(),{headers:{...securityHeaders,"Content-Type":"text/html; charset=utf-8","Content-Security-Policy":"default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'"}});
    if(req.method==="GET"&&path==="/manifest.webmanifest")return json({name:"Social Studio Review",short_name:"Image Review",start_url:"/",display:"standalone",background_color:"#090a0d",theme_color:"#090a0d",icons:[{src:"/icon.svg",type:"image/svg+xml",sizes:"any",purpose:"any"}]});
    if(req.method==="GET"&&path==="/icon.svg")return new Response('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#171a23"/><path d="m64 22 12 30 30 12-30 12-12 30-12-30-30-12 30-12Z" fill="#abb4fa"/></svg>',{headers:{...securityHeaders,"Content-Type":"image/svg+xml"}});
-   if(req.method==="GET"&&path==="/api/health")return json({ok:true,project:"social-image-review",publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only"});
+   if(req.method==="GET"&&path==="/api/health")return json({ok:true,project:"social-image-review",publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only",dry_run_enabled:true});
    if(req.method==="GET"&&path==="/api/items") {
     await sync(env);
     const status=u.searchParams.get("status")||"pending";
     if(!["pending","approved","rejected","scheduling","scheduled","published","error"].includes(status))return json({error:"Invalid status"},400);
     const filter=status==="error" ? "(i.status='error' OR c.status='failed' OR j.status IN ('failed','uncertain'))" : "i.status=?";
-    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,j.publish_at AS planned_at,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error FROM image_reviews i LEFT JOIN publication_jobs j ON j.image_id=i.id LEFT JOIN cleanup_jobs c ON c.image_id=i.id WHERE "+filter+" ORDER BY i.created_at ASC,i.image_index ASC LIMIT 200";
+    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,j.publish_at AS planned_at,d.status AS simulation_state,d.mock_post_id AS simulated_post_id,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error FROM image_reviews i LEFT JOIN publication_jobs j ON j.image_id=i.id LEFT JOIN cleanup_jobs c ON c.image_id=i.id LEFT JOIN publication_simulations d ON d.image_id=i.id WHERE "+filter+" ORDER BY i.created_at ASC,i.image_index ASC LIMIT 200";
     const stmt=env.DB.prepare(sql);
     const items=status==="error" ? await stmt.all() : await stmt.bind(status).all();
     return json({items:items.results||[],stats:await stats(env),publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only"});
@@ -147,6 +148,19 @@ export default {
    if(req.method==="GET"&&path==="/api/jobs") {
     const r=await env.DB.prepare("SELECT j.image_id,j.publish_at,j.status,j.attempts,j.next_attempt_at,j.postiz_post_id,j.provider_status,j.last_error,j.created_at,i.batch_id,i.image_index FROM publication_jobs j JOIN image_reviews i ON i.id=j.image_id ORDER BY j.publish_at ASC LIMIT 200").all();
     return json({jobs:r.results||[],publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only"});
+   }
+   if(req.method==="GET"&&path==="/api/simulations") {
+    const r=await env.DB.prepare("SELECT s.image_id,s.status AS simulation_state,s.publish_at AS planned_at,s.mock_post_id,s.updated_at FROM publication_simulations s ORDER BY s.updated_at DESC LIMIT 200").all();
+    return json({simulations:r.results||[],mode:"dry_run_only",publishing_enabled:false});
+   }
+   if(req.method==="POST"&&path==="/api/dry-run") {
+    if(req.headers.get("Origin")!=="https://"+HOME)return json({error:"Origin not allowed"},403);
+    if(!String(req.headers.get("Content-Type")||"").startsWith("application/json"))return json({error:"JSON required"},415);
+    if(Number(req.headers.get("Content-Length")||0)>1024)return json({error:"Body too large"},413);
+    const raw=await req.text();if(raw.length>1024)return json({error:"Body too large"},413);
+    let payload;try{payload=JSON.parse(raw)}catch{return json({error:"Invalid JSON"},400)}
+    try{return json(await dryRunAction(env,payload?.id,payload?.action))}
+    catch(error){if([400,409,422].includes(error?.status))return json({error:error.message},error.status);throw error}
    }
    if(req.method==="GET"&&path==="/api/events") {
     const id=u.searchParams.get("id")||"";
