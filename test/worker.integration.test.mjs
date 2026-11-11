@@ -130,3 +130,29 @@ test("45-minute-old pending card is not deleted; 49-hour-old pending card expire
   assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs").get().n,0);
  }finally{h.close()}
 });
+
+test("failed deletion appears in Issues, then owner can retry safely",async()=>{
+ const h=createHarness();try{
+  const item=h.addImage("fivefails20261112",3);
+  await h.call("/api/items?status=pending");
+  h.setFailDeletes(5);
+  const outcome=await h.decision(item.id,"rejected");
+  assert.equal(outcome.status,200);
+  for(let n=0;n<4;n++)await processRejectionCleanup(h.env,item.id);
+  const failed=h.db.prepare("SELECT status,attempts FROM cleanup_jobs WHERE image_id=?").get(item.id);
+  assert.equal(failed.status,"failed");
+  assert.equal(failed.attempts,5);
+  const issues=await h.call("/api/items?status=error");
+  assert.equal(issues.status,200);
+  assert.equal(issues.data.items.length,1);
+  assert.equal(issues.data.items[0].cleanup_state,"failed");
+  const payload={method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},body:JSON.stringify({id:item.id})};
+  const retried=await h.call("/api/cleanup/retry",payload);
+  assert.equal(retried.status,200);
+  assert.equal(retried.data.cleanup,"complete");
+  assert.equal(h.media.has(item.key),false);
+  const again=await h.call("/api/cleanup/retry",payload);
+  assert.equal(again.status,409);
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs").get().n,0);
+ }finally{h.close()}
+});
