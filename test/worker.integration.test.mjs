@@ -90,8 +90,8 @@ test("owner-only review, two independent decisions, held plans, no Postiz IDs",a
    assert.equal(approved.data.items.length,1);
    assert.equal(approved.data.items[0].planned_at,yes.data.planned_at);
    const events=await h.call("/api/events?id="+a.id);
-   assert.equal(events.data.events.length,1);
-   assert.equal(events.data.events[0].event,"approved");
+   assert.equal(events.data.events.length,2);
+   assert.deepEqual(events.data.events.map(x=>x.event).sort(),["approved","manifest_staged"]);
  } finally {h.close();}
 });
 
