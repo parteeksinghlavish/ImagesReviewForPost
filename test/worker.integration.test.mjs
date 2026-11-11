@@ -159,3 +159,86 @@ test("failed deletion appears in Issues, then owner can retry safely",async()=>{
   assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs").get().n,0);
  }finally{h.close()}
 });
+
+test("dry-run scheduling is individually approved, owner-only, and idempotent without Postiz",async()=>{
+ const h=createHarness();try{
+  const images=[0,1,2,3].map(n=>h.addImage("simulation20261112",n));
+  await h.call("/api/items?status=pending");
+  const payload=(id,action)=>({method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},body:JSON.stringify({id,action})});
+  const unapproved=await h.call("/api/dry-run",payload(images[0].id,"prepare"));
+  assert.equal(unapproved.status,409);
+  const unauthorized=await worker.fetch(new Request("https://review.titanrigs.com/api/dry-run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:images[0].id,action:"prepare"})}),h.env);
+  assert.equal(unauthorized.status,403);
+  const accepted=[];
+  for(const image of images){
+   const reviewed=await h.decision(image.id,"approved");
+   assert.equal(reviewed.status,200);
+   accepted.push(reviewed.planned_at);
+   const simulated=await h.call("/api/dry-run",payload(image.id,"prepare"));
+   assert.equal(simulated.status,200);
+   assert.equal(simulated.data.simulation_state,"simulated_scheduled");
+   assert.equal(simulated.data.publishing_enabled,false);
+   assert.equal(simulated.data.real_postiz_request,false);
+   assert.equal(simulated.data.duplicate,false);
+   assert.equal(simulated.data.planned_at,reviewed.data.planned_at);
+  }
+  const repeated=await h.call("/api/dry-run",payload(images[0].id,"prepare"));
+  assert.equal(repeated.status,200);
+  assert.equal(repeated.data.duplicate,true);
+  const rows=h.db.prepare("SELECT image_id,status,COUNT(*) AS c FROM publication_simulations GROUP BY image_id").all();
+  assert.equal(rows.length,4);
+  assert.ok(rows.every(r=>r.status==="simulated_scheduled"&&r.c===1));
+  const real=h.db.prepare("SELECT status,postiz_post_id FROM publication_jobs").all();
+  assert.equal(real.length,4);
+  assert.ok(real.every(r=>r.status==="held"&&r.postiz_post_id===null));
+  const view=await h.call("/api/items?status=approved");
+  assert.equal(view.status,200);
+  assert.equal(view.data.items.length,4);
+  assert.ok(view.data.items.every(i=>i.simulation_state==="simulated_scheduled"));
+  const results=await h.call("/api/simulations");
+  assert.equal(results.status,200);
+  assert.equal(results.data.simulations.length,4);
+  assert.equal(results.data.publishing_enabled,false);
+ }finally{h.close()}
+});
+test("mock reconciliation never retries Postiz, and uncertain can only be resolved",async()=>{
+ const h=createHarness();try{
+  const image=h.addImage("uncertainbatch20261112",2);
+  await h.call("/api/items?status=pending");
+  const payload=(action)=>({method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},body:JSON.stringify({id:image.id,action})});
+  await h.decision(image.id,"approved");
+  assert.equal((await h.call("/api/dry-run",payload("prepare"))).data.simulation_state,"simulated_scheduled");
+  assert.equal((await h.call("/api/dry-run",payload("uncertain"))).data.simulation_state,"simulated_uncertain");
+  const again=await h.call("/api/dry-run",payload("prepare"));
+  assert.equal(again.data.duplicate,true);
+  assert.equal(again.data.simulation_state,"simulated_uncertain");
+  const checked=await h.call("/api/dry-run",payload("published"));
+  assert.equal(checked.data.simulation_state,"simulated_published");
+  assert.equal((await h.call("/api/dry-run",payload("failed"))).status,409);
+  const job=h.db.prepare("SELECT status,postiz_post_id,attempts FROM publication_jobs WHERE image_id=?").get(image.id);
+  assert.deepEqual({status:job.status,postiz_post_id:job.postiz_post_id,attempts:job.attempts},{status:"held",postiz_post_id:null,attempts:0});
+  const events=h.db.prepare("SELECT event FROM review_events WHERE image_id=?").all(image.id).map(x=>x.event);
+  assert.equal(events.filter(x=>x==="dry_run_scheduled").length,1);
+  assert.equal(events.filter(x=>x==="dry_run_uncertain").length,1);
+  assert.equal(events.filter(x=>x==="dry_run_published").length,1);
+ }finally{h.close()}
+});
+test("rejected, absent and non-JPEG images can never enter dry-run publication",async()=>{
+ const h=createHarness();try{
+  const payload=(id)=>({method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},body:JSON.stringify({id,action:"prepare"})});
+  const rejected=h.addImage("testrejected20261112",1);
+  const missing=h.addImage("testmissing20261112",0);
+  const corrupt=h.addImage("testcorrupt20261112",3);
+  await h.call("/api/items?status=pending");
+  await h.decision(rejected.id,"rejected");
+  assert.equal((await h.call("/api/dry-run",payload(rejected.id))).status,409);
+  await h.decision(missing.id,"approved");
+  h.media.delete(missing.key);
+  assert.equal((await h.call("/api/dry-run",payload(missing.id))).status,409);
+  await h.decision(corrupt.id,"approved");
+  h.media.set(corrupt.key,new Uint8Array([0,1,2,3]));
+  assert.equal((await h.call("/api/dry-run",payload(corrupt.id))).status,422);
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_simulations").get().n,0);
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs WHERE postiz_post_id IS NOT NULL").get().n,0);
+ }finally{h.close()}
+});

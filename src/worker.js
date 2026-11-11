@@ -76,6 +76,45 @@ function render(){
  if(!item){$('stage').innerHTML='<div class="empty"><div class="symbol">✦</div><h2>'+(state.tab==='pending'?'All reviewed':'Nothing here yet')+'</h2><p>'+(state.tab==='pending'?'New images will appear here after the generation workflow uploads them to private R2 storage.':'No images with this status yet.')+'</p></div>';return}
  const img=item.status==='rejected'?'<div style="height:100%;display:grid;place-items:center;color:#777985;font-size:13px">Image deleted from storage</div>':'<img loading="eager" draggable="false" alt="Image awaiting review" src="/media/'+encodeURIComponent(item.object_key)+'"/>';
  $('stage').innerHTML='<article class="review" id="review">'+img+'<span class="tag">'+escape(labels[item.status]||item.status)+'</span><span class="stamp reject" id="rStamp">REJECT</span><span class="stamp approve" id="aStamp">APPROVE</span><div class="card-footer"><div><strong>Image '+(item.image_index+1)+' of 4</strong><p>Batch '+escape(item.batch_id.slice(0,12))+' · '+escape(item.status)+(item.planned_at?' · HOLD · '+new Date(item.planned_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'')+'</p></div><span style="font-size:12px;color:#ccc">'+(state.index+1)+' / '+n+'</span></div></article>';
+ if(state.tab==='approved'){
+  const panel=document.createElement('div');
+  panel.style.cssText='margin:13px 0 0;padding:13px;border:1px solid #363944;border-radius:12px;background:#15161c;display:flex;flex-direction:column;align-items:center;gap:9px';
+  const heading=document.createElement('strong');
+  heading.textContent='POSTIZ SIMULATION ONLY';heading.style.cssText='color:#b9bff2;font-size:11px;letter-spacing:.1em';
+  panel.appendChild(heading);
+  const status=document.createElement('div');
+  status.textContent=item.simulation_state ? 'Mock status: '+item.simulation_state.replace('simulated_','') : 'Not simulated yet';
+  status.style.cssText='font-size:12px;color:#a4a6b1';
+  panel.appendChild(status);
+  const buttons=document.createElement('div');buttons.style.cssText='display:flex;flex-wrap:wrap;justify-content:center;gap:7px';
+  function addDryRunButton(label,action){
+   const button=document.createElement('button');
+   button.type='button';button.textContent=label;
+   button.style.cssText='border:1px solid #4a4c60;border-radius:9px;background:#242635;color:#e4e5f3;font-size:12px;padding:9px 12px';
+   button.addEventListener('click',async()=>{
+    if(state.busy)return;state.busy=true;button.disabled=true;
+    try{const result=await api('/api/dry-run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,action})});
+     toast('Simulation: '+result.simulation_state.replace('simulated_',''));await load();
+    }catch(e){toast(e.message)}finally{state.busy=false;button.disabled=false}
+   });
+   buttons.appendChild(button);
+  }
+  if(!item.simulation_state)addDryRunButton('Simulate scheduling','prepare');
+  else if(item.simulation_state==='simulated_scheduled'){
+    addDryRunButton('Simulate published','published');
+    addDryRunButton('Simulate failed','failed');
+    addDryRunButton('Simulate uncertain','uncertain');
+  }else if(item.simulation_state==='simulated_uncertain'){
+    addDryRunButton('Verify scheduled','verified_scheduled');
+    addDryRunButton('Verify published','published');
+    addDryRunButton('Verify failed','failed');
+  }
+  panel.appendChild(buttons);
+  const note=document.createElement('small');
+  note.textContent='No real Postiz or Instagram requests. Held publishing slot is unchanged.';
+  note.style.cssText='font-size:11px;color:#868996;text-align:center';
+  panel.appendChild(note);$('stage').appendChild(panel);
+ }
  if(state.tab==='error'&&item.cleanup_state==='failed'){
   $('stage').insertAdjacentHTML('beforeend','<button id="retryCleanup" style="margin:14px auto 0;display:block;background:#2d2325;color:#ffb4bc;border:1px solid #714149;border-radius:12px;padding:10px 20px">Retry failed image deletion</button>');
   $('retryCleanup').addEventListener('click',async()=>{
