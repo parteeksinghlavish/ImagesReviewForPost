@@ -100,7 +100,9 @@ async function sync(env) {
       const match = KEY_MATCH.exec(file.key);
       if (!match) continue;
       const id = match[1]+"-"+match[2];
-      all.push(env.DB.prepare("INSERT OR IGNORE INTO image_reviews (id,object_key,batch_id,image_index) VALUES (?,?,?,?)").bind(id,file.key,match[1],Number(match[2])));
+      const timestamp=file.uploaded ? new Date(file.uploaded) : new Date();
+      const createdAt=Number.isFinite(timestamp.getTime()) ? timestamp.toISOString() : new Date().toISOString();
+      all.push(env.DB.prepare("INSERT OR IGNORE INTO image_reviews (id,object_key,batch_id,image_index,created_at) VALUES (?,?,?,?,?)").bind(id,file.key,match[1],Number(match[2]),createdAt));
     }
     cursor = batch.truncated?batch.cursor:undefined;
   } while (cursor && all.length < 3000);
@@ -166,6 +168,6 @@ export default {
  },
  async scheduled(controller,env,ctx) {
   // Periodic cleanup only. Never dispatch held posts to Postiz/Instagram.
-  ctx.waitUntil(maintenance(env).then(result=>console.log("review cleanup",JSON.stringify(result))).catch(e=>console.error("review cleanup failed",String(e))));
+  ctx.waitUntil((async()=>{await sync(env);return maintenance(env)})().then(result=>console.log("review cleanup",JSON.stringify(result))).catch(e=>console.error("review cleanup failed",String(e))));
  }
 };
