@@ -50,3 +50,7 @@ Never publish pending image keys through another public endpoint or enable `r2.d
 `database/schema.sql` is a reference of the existing D1 schema, not an automatic migration.
 
 No API keys, credentials, personal email addresses or user data are committed to this repository.
+
+## Deployment verification
+
+Cloudflare Workers Builds is connected to the `main` branch. Changes committed to `main` trigger a production build and the `npx wrangler deploy` command. Verify the outcome in Cloudflare's **Deployments / Builds** history; a successful GitHub push alone does not prove deployment succeeded.
