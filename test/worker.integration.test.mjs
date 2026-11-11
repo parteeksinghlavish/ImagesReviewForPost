@@ -40,7 +40,7 @@ function createHarness() {
  };
  const env={DB,PENDING,OWNER_EMAIL:OWNER};
  function url(path,options={}) {
-   return new Request("https://review.titanrigs.com"+path,{headers:{"Cf-Access-Authenticated-User-Email":OWNER,...options.headers},...options});
+   return new Request("https://review.titanrigs.com"+path,{...options,headers:{"Cf-Access-Authenticated-User-Email":OWNER,...options.headers}});
  }
  async function call(path,options={}){
    const res=await worker.fetch(url(path,options),env);
