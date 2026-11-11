@@ -41,7 +41,7 @@ function page() {
 @media (max-height:730px){.top{height:52px}.titlebar{margin:13px 0 12px}.tabs{margin-bottom:13px}.review{max-height:50dvh}.controls{margin-top:12px}.action{width:57px;height:57px}.hint{margin:10px 0 0}}
 </style></head>
 <body><main class="shell">
-<header class="top"><div class="brand"><div class="mark">✦</div><span>SOCIAL STUDIO<span style="color:#777986"> / REVIEW</span></span></div><div class="env">Private workspace</div></header>
+<header class="top"><div class="brand"><div class="mark">✦</div><span>SOCIAL STUDIO<span style="color:#777986"> / REVIEW</span></span></div><div class="env" style="color:#e6cc8c;border-color:#72613e">Publishing paused</div></header>
 <section class="titlebar"><div><div class="eyebrow">Creative approval</div><h1>Review queue</h1></div><div class="count" id="counter">—</div></section>
 <nav class="tabs" id="tabs" aria-label="Review filters"></nav>
 <div class="progress"><div id="progress"></div></div>
@@ -51,7 +51,7 @@ function page() {
 <button class="action refresh" id="refreshBtn" aria-label="Refresh queue" title="Refresh"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 1-2.3-5.6M20 4v7h-7"/></svg></button>
 <button class="action approve" id="approveBtn" aria-label="Approve image" title="Approve (right arrow)"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></button>
 </div><p class="hint" id="hint">Swipe left to reject · Swipe right to approve</p>
-<footer class="bottom"><span>DiscoverXploration · Image by image</span><strong>PRIVATE REVIEW</strong></footer></main>
+<footer class="bottom"><span>DiscoverXploration · Image by image</span><strong>NO LIVE POSTS</strong></footer></main>
 <div class="toast" role="status" id="toast"></div>
 <script>
 (()=>{'use strict';
@@ -73,13 +73,13 @@ function render(){
  $('hint').textContent=state.tab==='pending'?'Swipe left to reject · Swipe right to approve':'Review history · images remain private';
  if(!item){$('stage').innerHTML='<div class="empty"><div class="symbol">✦</div><h2>'+(state.tab==='pending'?'All reviewed':'Nothing here yet')+'</h2><p>'+(state.tab==='pending'?'New images will appear here after the generation workflow uploads them to private R2 storage.':'No images with this status yet.')+'</p></div>';return}
  const img=item.status==='rejected'?'<div style="height:100%;display:grid;place-items:center;color:#777985;font-size:13px">Image deleted from storage</div>':'<img loading="eager" draggable="false" alt="Image awaiting review" src="/media/'+encodeURIComponent(item.object_key)+'"/>';
- $('stage').innerHTML='<article class="review" id="review">'+img+'<span class="tag">'+escape(labels[item.status]||item.status)+'</span><span class="stamp reject" id="rStamp">REJECT</span><span class="stamp approve" id="aStamp">APPROVE</span><div class="card-footer"><div><strong>Image '+(item.image_index+1)+' of 4</strong><p>Batch '+escape(item.batch_id.slice(0,12))+' · '+escape(item.status)+'</p></div><span style="font-size:12px;color:#ccc">'+(state.index+1)+' / '+n+'</span></div></article>';
+ $('stage').innerHTML='<article class="review" id="review">'+img+'<span class="tag">'+escape(labels[item.status]||item.status)+'</span><span class="stamp reject" id="rStamp">REJECT</span><span class="stamp approve" id="aStamp">APPROVE</span><div class="card-footer"><div><strong>Image '+(item.image_index+1)+' of 4</strong><p>Batch '+escape(item.batch_id.slice(0,12))+' · '+escape(item.status)+(item.planned_at?' · HOLD · '+new Date(item.planned_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'')+'</p></div><span style="font-size:12px;color:#ccc">'+(state.index+1)+' / '+n+'</span></div></article>';
  if(state.tab==='pending')swipe($('review'));
  else {const imgEl=$('review').querySelector('img');if(imgEl)imgEl.addEventListener('click',()=>window.open(imgEl.src,'_blank','noopener,noreferrer'))}
 }
 async function load(){try{const data=await api('/api/items?status='+encodeURIComponent(state.tab));state.items=data.items||[];state.stats=data.stats||{};state.index=0;render()}catch(e){toast(e.message);$('stage').innerHTML='<div class="empty"><h2>Could not load queue</h2><p>'+escape(e.message)+'</p></div>'}}
 async function decide(decision){const item=current();if(!item||state.busy||state.tab!=='pending')return;state.busy=true;$('rejectBtn').disabled=true;$('approveBtn').disabled=true;const card=$('review');if(card){card.style.transform=decision==='approved'?'translateX(120%) rotate(13deg)':'translateX(-120%) rotate(-13deg)';card.style.opacity='.2'}
- try{await api('/api/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,decision})});state.items.splice(state.index,1);if(state.index>=state.items.length)state.index=Math.max(0,state.items.length-1);state.stats.pending=Math.max(0,(state.stats.pending||1)-1);state.stats[decision]=(state.stats[decision]||0)+1;render();toast(decision==='approved'?'Approved · awaiting scheduler':'Rejected · removed from storage')}catch(e){toast(e.message);render()}finally{state.busy=false;$('rejectBtn').disabled=false;$('approveBtn').disabled=false}}
+ try{await api('/api/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,decision})});state.items.splice(state.index,1);if(state.index>=state.items.length)state.index=Math.max(0,state.items.length-1);state.stats.pending=Math.max(0,(state.stats.pending||1)-1);state.stats[decision]=(state.stats[decision]||0)+1;render();toast(decision==='approved'?'Approved · slot reserved (Instagram paused)':'Rejected · cleanup requested')}catch(e){toast(e.message);render()}finally{state.busy=false;$('rejectBtn').disabled=false;$('approveBtn').disabled=false}}
 function swipe(card){let start=null;card.addEventListener('pointerdown',e=>{if(state.busy||e.button!==0)return;start={x:e.clientX,y:e.clientY};card.classList.add('dragging');card.setPointerCapture(e.pointerId)});
 card.addEventListener('pointermove',e=>{if(!start)return;const dx=e.clientX-start.x,dy=e.clientY-start.y;if(Math.abs(dy)>Math.abs(dx)*1.7)return;card.style.transform='translateX('+dx+'px) rotate('+(dx/25)+'deg)';const opacity=Math.min(1,Math.abs(dx)/110);$('rStamp').style.opacity=dx<0?opacity:0;$('aStamp').style.opacity=dx>0?opacity:0});
 card.addEventListener('pointerup',e=>{if(!start)return;const dx=e.clientX-start.x;start=null;card.classList.remove('dragging');if(dx>85)decide('approved');else if(dx< -85)decide('rejected');else {card.style.transform='';$('rStamp').style.opacity=0;$('aStamp').style.opacity=0}});
