@@ -54,3 +54,16 @@ No API keys, credentials, personal email addresses or user data are committed to
 ## Deployment verification
 
 Cloudflare Workers Builds is connected to the `main` branch. Changes committed to `main` trigger a production build and the `npx wrangler deploy` command. Verify the outcome in Cloudflare's **Deployments / Builds** history; a successful GitHub push alone does not prove deployment succeeded.
+
+## P0/P1 implementation status (publishing paused)
+
+- **P0 prepared:** each approved image gets a unique, held 18:00 IST posting slot in D1; one image per slot. A private `review/held/<image-id>.json` manifest records the intended single-image publication. `src/postiz-plan.js` prepares the exact one-image Postiz schedule payload only after a valid upload receipt, but **does not send it**.
+- **P1 prepared:** approval history, queue/job inspection, bounded rejection cleanup retries, 48-hour pending-review expiry, manual cleanup retry and 15-minute maintenance cron. Publication reconciliation state transitions are defined but **not connected to the Postiz API**.
+- **Hard safety lock:** `LIVE_POSTING_ENABLED=false`. The Worker makes **zero Postiz/Instagram requests**, and no Postiz scheduler or publisher is activated. Do not flip this constant as a shortcut: implement and review idempotent dispatch, receipt persistence, uncertain-result reconciliation and end-to-end tests first.
+- **Build verification:** Cloudflare production builds run `npm install && npm test` before `npx wrangler deploy`. The latest successful test build ran 17 passing tests.
+
+### Still required before live publishing
+
+1. Implement a gated, authenticated publisher that downloads the approved private image, uploads it to Postiz, creates exactly one scheduled single-image post and atomically stores the provider receipt. Never publish on approval alone while the lock is off.
+2. Implement Postiz status polling and safe reconciliation for scheduled/published/failed/uncertain results; uncertain outcomes must never automatically resend.
+3. Test the entire pipeline with non-publishing fixtures, then explicitly obtain the owner's authorization before enabling any live Postiz schedule or Instagram publication.
