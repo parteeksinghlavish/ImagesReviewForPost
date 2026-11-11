@@ -85,6 +85,22 @@ export async function processRejectionCleanup(env,id) {
   }
 }
 
+export async function retryFailedCleanup(env,id) {
+  if (typeof id!=="string" || !/^[A-Za-z0-9_-]{8,80}-[0-3]$/.test(id)) {
+    throw Object.assign(new Error("Invalid image ID"),{status:400});
+  }
+  const changed=await env.DB.prepare(`UPDATE cleanup_jobs SET status='pending',attempts=0,
+    next_attempt_at=NULL,last_error=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE image_id=? AND status='failed'
+      AND EXISTS(SELECT 1 FROM image_reviews WHERE id=? AND status='rejected')
+    RETURNING image_id`).bind(id,id).first();
+  if(!changed)throw new ReviewConflict("No failed, rejected cleanup to retry");
+  const outcome=await processRejectionCleanup(env,id);
+  await env.DB.prepare("INSERT INTO review_events(image_id,event,detail) VALUES(?,?,?)")
+    .bind(id,"cleanup_retry",outcome.status).run();
+  return {id,cleanup:outcome.status};
+}
+
 export async function maintenance(env,{expiryHours=48,maxItems=20}={}) {
   // This maintenance deliberately never touches Postiz or transitions held publication jobs.
   const clean=await env.DB.prepare(`SELECT image_id FROM cleanup_jobs
