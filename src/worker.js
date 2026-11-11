@@ -1,5 +1,5 @@
 
-import { reviewDecision, maintenance, queueStats } from "./operations.js";
+import { reviewDecision, maintenance, queueStats, retryFailedCleanup } from "./operations.js";
 import { LIVE_POSTING_ENABLED } from "./queue.js";
 const HOME = "review.titanrigs.com";
 // Owner identity is injected as the Cloudflare OWNER_EMAIL runtime secret.
@@ -74,6 +74,15 @@ function render(){
  if(!item){$('stage').innerHTML='<div class="empty"><div class="symbol">✦</div><h2>'+(state.tab==='pending'?'All reviewed':'Nothing here yet')+'</h2><p>'+(state.tab==='pending'?'New images will appear here after the generation workflow uploads them to private R2 storage.':'No images with this status yet.')+'</p></div>';return}
  const img=item.status==='rejected'?'<div style="height:100%;display:grid;place-items:center;color:#777985;font-size:13px">Image deleted from storage</div>':'<img loading="eager" draggable="false" alt="Image awaiting review" src="/media/'+encodeURIComponent(item.object_key)+'"/>';
  $('stage').innerHTML='<article class="review" id="review">'+img+'<span class="tag">'+escape(labels[item.status]||item.status)+'</span><span class="stamp reject" id="rStamp">REJECT</span><span class="stamp approve" id="aStamp">APPROVE</span><div class="card-footer"><div><strong>Image '+(item.image_index+1)+' of 4</strong><p>Batch '+escape(item.batch_id.slice(0,12))+' · '+escape(item.status)+(item.planned_at?' · HOLD · '+new Date(item.planned_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'')+'</p></div><span style="font-size:12px;color:#ccc">'+(state.index+1)+' / '+n+'</span></div></article>';
+ if(state.tab==='error'&&item.cleanup_state==='failed'){
+  $('stage').insertAdjacentHTML('beforeend','<button id="retryCleanup" style="margin:14px auto 0;display:block;background:#2d2325;color:#ffb4bc;border:1px solid #714149;border-radius:12px;padding:10px 20px">Retry failed image deletion</button>');
+  $('retryCleanup').addEventListener('click',async()=>{
+    if(state.busy)return;state.busy=true;
+    try{const result=await api('/api/cleanup/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id})});toast('Cleanup: '+result.cleanup);await load()}
+    catch(e){toast(e.message)}
+    finally{state.busy=false}
+  });
+ }
  if(state.tab==='pending')swipe($('review'));
  else {const imgEl=$('review').querySelector('img');if(imgEl)imgEl.addEventListener('click',()=>window.open(imgEl.src,'_blank','noopener,noreferrer'))}
 }
@@ -161,6 +170,15 @@ export default {
     if(raw.length>1024)return json({error:"Body too large"},413);
     let payload;try{payload=JSON.parse(raw)}catch{return json({error:"Invalid JSON"},400)}
     try{return json(await reviewDecision(env,payload?.id,payload?.decision))}
+    catch(error){if(error?.status===409||error?.status===400)return json({error:error.message},error.status);throw error}
+   }
+   if(req.method==="POST"&&path==="/api/cleanup/retry") {
+    if(req.headers.get("Origin")!=="https://"+HOME)return json({error:"Origin not allowed"},403);
+    if(!String(req.headers.get("Content-Type")||"").startsWith("application/json"))return json({error:"JSON required"},415);
+    if(Number(req.headers.get("Content-Length")||0)>1024)return json({error:"Body too large"},413);
+    const raw=await req.text();if(raw.length>1024)return json({error:"Body too large"},413);
+    let payload;try{payload=JSON.parse(raw)}catch{return json({error:"Invalid JSON"},400)}
+    try{return json(await retryFailedCleanup(env,payload?.id))}
     catch(error){if(error?.status===409||error?.status===400)return json({error:error.message},error.status);throw error}
    }
    return json({error:"Not found"},404);
