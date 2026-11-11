@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS publication_jobs (
   attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
   next_attempt_at TEXT, lease_token TEXT, lease_until TEXT,
   postiz_post_id TEXT UNIQUE, provider_status TEXT, last_error TEXT, last_checked_at TEXT,
+  manifest_synced_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );

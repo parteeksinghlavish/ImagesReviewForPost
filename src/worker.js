@@ -1,6 +1,7 @@
 
 import { reviewDecision, maintenance, queueStats, retryFailedCleanup } from "./operations.js";
 import { LIVE_POSTING_ENABLED } from "./queue.js";
+import { reconcileHeldManifests } from "./manifest.js";
 const HOME = "review.titanrigs.com";
 // Owner identity is injected as the Cloudflare OWNER_EMAIL runtime secret.
 const securityHeaders = {
@@ -186,6 +187,6 @@ export default {
  },
  async scheduled(controller,env,ctx) {
   // Periodic cleanup only. Never dispatch held posts to Postiz/Instagram.
-  ctx.waitUntil((async()=>{await sync(env);return maintenance(env)})().then(result=>console.log("review cleanup",JSON.stringify(result))).catch(e=>console.error("review cleanup failed",String(e))));
+  ctx.waitUntil((async()=>{await sync(env);const cleanup=await maintenance(env);const held=await reconcileHeldManifests(env);return {cleanup,held}})().then(result=>console.log("review maintenance",JSON.stringify(result))).catch(e=>console.error("review maintenance failed",String(e))));
  }
 };

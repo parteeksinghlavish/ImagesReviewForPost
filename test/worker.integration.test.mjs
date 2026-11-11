@@ -36,6 +36,7 @@ function createHarness() {
  const PENDING={
    list:async ({prefix})=>({objects:[...media.keys()].filter(k=>k.startsWith(prefix)).map(key=>({key})),truncated:false}),
    get:async key=>media.has(key)?{body:media.get(key),httpMetadata:{contentType:"image/jpeg"}}:null,
+   put:async (key,body)=>{media.set(key,new TextEncoder().encode(body))},
    delete:async key=>{deleteCalls++;if(failDeletes-->0)throw Error("Synthetic R2 fault");media.delete(key)}
  };
  const env={DB,PENDING,OWNER_EMAIL:OWNER};
@@ -69,6 +70,8 @@ test("owner-only review, two independent decisions, held plans, no Postiz IDs",a
    assert.equal(yes.status,200);
    assert.equal(yes.data.publication_state,"held");
    assert.equal(yes.data.publishing_enabled,false);
+   assert.equal(yes.data.manifest_state,"staged");
+   assert.equal(h.media.has("review/held/"+a.id+".json"),true);
    assert.ok(yes.data.planned_at.endsWith("12:30:00Z"));
    const no=await h.decision(b.id,"rejected");
    assert.equal(no.status,200);

@@ -1,4 +1,5 @@
 import { firstPostingSlot, MAX_CLEANUP_ATTEMPTS, nextCleanupTime, LIVE_POSTING_ENABLED } from "./queue.js";
+import { writeHeldManifest } from "./manifest.js";
 
 const MATCH_KEY = /^review\/pending\/([A-Za-z0-9_-]{8,80})\/([0-3])\.(jpg|jpeg|png|webp)$/i;
 const utcNowSQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
@@ -50,7 +51,8 @@ export async function reviewDecision(env, id, decision, reason="manual") {
     if (batches[1]?.meta?.changes !== 1) throw new Error("Could not reserve a unique publishing time");
     const job = await env.DB.prepare("SELECT image_id,publish_at,status FROM publication_jobs WHERE image_id=?").bind(id).first();
     if (!job || job.status !== "held") throw new Error("Publication hold was not recorded");
-    return {id,status:"approved",planned_at:job.publish_at,publication_state:"held",publishing_enabled:LIVE_POSTING_ENABLED};
+    const manifest=await writeHeldManifest(env,id);
+    return {id,status:"approved",planned_at:job.publish_at,publication_state:"held",manifest_state:manifest.status,publishing_enabled:LIVE_POSTING_ENABLED};
   }
   const batches = await env.DB.batch([
     env.DB.prepare(rejectSQL[0]).bind(id),
