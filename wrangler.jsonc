@@ -5,12 +5,27 @@
   "compatibility_date": "2026-11-10",
   "workers_dev": false,
   "routes": [
-    { "pattern": "review.titanrigs.com", "custom_domain": true }
+    {
+      "pattern": "review.titanrigs.com",
+      "custom_domain": true
+    }
   ],
   "d1_databases": [
-    { "binding": "DB", "database_name": "social-image-review", "database_id": "19421fb2-c715-4cc3-a084-5ed153156eda" }
+    {
+      "binding": "DB",
+      "database_name": "social-image-review",
+      "database_id": "19421fb2-c715-4cc3-a084-5ed153156eda"
+    }
   ],
   "r2_buckets": [
-    { "binding": "PENDING", "bucket_name": "insta-workflow" }
-  ]
+    {
+      "binding": "PENDING",
+      "bucket_name": "insta-workflow"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
+  }
 }
