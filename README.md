@@ -81,3 +81,25 @@ The strict `LIVE_POSTING_ENABLED=false` guard remains in place. Future real Post
 ### Where simulated posts appear
 
 Dry-run cards move between **Approved → Scheduled → Published** (or **Issues** for simulated failed/uncertain outcomes). Scheduled/Published cards are explicitly marked **SIMULATED** and **REAL: HELD · NO INSTAGRAM POST**. This changes display filtering only; the actual Postiz jobs remain held and nothing is sent to Instagram. An uncertain mock outcome may be verified without resending.
+
+## Review workspace and calendar
+
+The review interface now provides:
+
+- **Pending**: swipe right to approve or left to reject, one image at a time.
+- **All**: browse the full recent review queue (up to 200 items in this version), including approved, rejected, held and simulated results.
+- **Approved / Scheduled / Published / Issues**: use Previous/Next, left/right arrow keys and the thumbnail filmstrip to navigate records. A simulated published image moves out of Approved into Published and is prominently marked SIMULATED; its real job stays HELD.
+- **Image activity**: authenticated event history for each image, including approval, manifest staging, simulated publication states and held-slot changes.
+- **Calendar**: mobile-friendly month grid and agenda for approved HELD posting reservations. Times are shown in **Asia/Kolkata (IST)**; select an event to inspect its image.
+- **Change held slot**: reserve a different date/time, validated at least one hour ahead and within 90 days; rejects duplicate slots and stale edits.
+- **Cancel hold**: remove the held manifest but retain the approved JPEG and decision history; failed manifest deletion is retried by maintenance.
+- **Reserve new slot**: restore a cancelled hold to a new future time. Changing or cancelling a slot clears earlier mock simulation outcomes for that image.
+
+All of these are **internal scheduling plans only**. Postiz and Instagram are never contacted. The project retains `LIVE_POSTING_ENABLED=false`, and the actual `publication_jobs.postiz_post_id` remains NULL until a separately reviewed live-publishing integration is explicitly authorized.
+
+### Current planning limitations
+
+- The list UI currently loads at most 200 review cards per tab; pagination and full-text search are future work for larger queues.
+- Under the current D1 schema, a cancelled slot remains a unique historical reservation. New slots are allocated after existing reservations, and cancellation does not retroactively free its original timestamp. Altering this requires a deliberate database migration.
+- UI controls are validated by unit/integration tests and JavaScript syntax compilation; a full manual Android gesture/accessibility pass is still recommended.
+- No real Postiz scheduling or provider reconciliation has been tested, because live posting is intentionally disabled.
