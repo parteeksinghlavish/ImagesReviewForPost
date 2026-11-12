@@ -359,7 +359,8 @@ test("editing a held slot invalidates stale mock publication but does not touch 
   assert.equal((await h.call("/api/items?status=published")).data.items.length,0);
   assert.equal((await h.call("/api/items?status=approved")).data.items.length,1);
   const real=h.db.prepare("SELECT status,postiz_post_id FROM publication_jobs WHERE image_id=?").get(x.id);
-  assert.deepEqual(real,{status:"held",postiz_post_id:null});
+  assert.equal(real.status,"held");
+  assert.equal(real.postiz_post_id,null);
  }finally{h.close()}
 });
 test("failed held-manifest deletion is retried by maintenance without removing approved JPEG",async()=>{
