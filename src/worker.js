@@ -120,7 +120,7 @@ function current(){return state.items[state.index]}
 function showTabs(){const tabs=$('tabs');tabs.innerHTML=TABS.map(t=>'<button class="tab '+(state.tab===t?'active':'')+'" data-tab="'+t+'">'+labels[t]+' '+(state.stats[t]||'')+'</button>').join('');tabs.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{state.view='queue';state.tab=b.dataset.tab;syncViewButtons();load()}))}
 function render(){
  if(state.view==='calendar'){renderCalendar();return}
- $('stage').hidden=false;$('calendarPanel').hidden=true;$('tabs').hidden=false;$('progress').hidden=false;
+ $('stage').hidden=false;$('calendarPanel').hidden=true;$('tabs').hidden=false;$('progress').hidden=false;$('controls').hidden=false;
  showTabs();const item=current(),n=state.items.length;
  $('browseNav').hidden=state.tab==='pending'||n<2;
  $('filmstrip').hidden=state.tab==='pending'||n<2;
@@ -204,7 +204,7 @@ $('approveBtn').addEventListener('click',()=>decide('approved'));$('rejectBtn').
 $('previousCard').addEventListener('click',()=>navigate(-1));$('nextCard').addEventListener('click',()=>navigate(1));
 $('queueView').addEventListener('click',()=>{state.view='queue';syncViewButtons();load()});
 $('calendarView').addEventListener('click',()=>{state.view='calendar';syncViewButtons();loadCalendar()});
-window.addEventListener('keydown',e=>{if(state.busy||$('modalRoot').childElementCount)return;if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;if(state.view==='calendar')return;if(state.tab==='pending'&&e.key==='ArrowLeft')decide('rejected');else if(state.tab==='pending'&&e.key==='ArrowRight')decide('approved');else if(e.key==='ArrowLeft')navigate(-1);else if(e.key==='ArrowRight')navigate(1)});
+window.addEventListener('keydown',e=>{if($('modalRoot').childElementCount){if(e.key==='Escape')closeModal();return}if(state.busy)return;if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;if(state.view==='calendar')return;if(state.tab==='pending'&&e.key==='ArrowLeft')decide('rejected');else if(state.tab==='pending'&&e.key==='ArrowRight')decide('approved');else if(e.key==='ArrowLeft')navigate(-1);else if(e.key==='ArrowRight')navigate(1)});
 
 function navigate(offset){
  if(state.busy || state.view!=='queue')return;
@@ -245,7 +245,7 @@ function openModal(title,content){
 }
 function localIST(iso){return new Date(Date.parse(iso)+330*60000).toISOString().slice(0,16)}
 function toUTCFromIST(value){
- if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value))throw Error('Choose a valid IST date and time');
+ if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$/.test(value))throw Error('Choose a valid IST date and time');
  return new Date(Date.parse(value+':00Z')-330*60000).toISOString().replace('.000Z','Z');
 }
 function addCardTools(item){
