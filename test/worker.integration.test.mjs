@@ -191,10 +191,13 @@ test("dry-run scheduling is individually approved, owner-only, and idempotent wi
   const real=h.db.prepare("SELECT status,postiz_post_id FROM publication_jobs").all();
   assert.equal(real.length,4);
   assert.ok(real.every(r=>r.status==="held"&&r.postiz_post_id===null));
-  const view=await h.call("/api/items?status=approved");
+  const approved=await h.call("/api/items?status=approved");
+  assert.equal(approved.status,200);
+  assert.equal(approved.data.items.length,0);
+  const view=await h.call("/api/items?status=scheduled");
   assert.equal(view.status,200);
   assert.equal(view.data.items.length,4);
-  assert.ok(view.data.items.every(i=>i.simulation_state==="simulated_scheduled"));
+  assert.ok(view.data.items.every(i=>i.simulation_state==="simulated_scheduled"&&i.publication_state==="held"));
   const results=await h.call("/api/simulations");
   assert.equal(results.status,200);
   assert.equal(results.data.simulations.length,4);
