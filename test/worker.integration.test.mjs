@@ -242,3 +242,49 @@ test("rejected, absent and non-JPEG images can never enter dry-run publication",
   assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs WHERE postiz_post_id IS NOT NULL").get().n,0);
  }finally{h.close()}
 });
+
+test("simulated scheduled/published entries appear in their tabs, while real jobs stay held",async()=>{
+ const h=createHarness();try{
+  const a=h.addImage("statusbatch20261112",1),b=h.addImage("statusbatch20261112",3);
+  await h.call("/api/items?status=pending");
+  await h.decision(a.id,"approved");await h.decision(b.id,"approved");
+  const payload=(id,action)=>({method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},body:JSON.stringify({id,action})});
+  assert.equal((await h.call("/api/items?status=approved")).data.items.length,2);
+  assert.equal((await h.call("/api/dry-run",payload(a.id,"prepare"))).status,200);
+  const scheduled=await h.call("/api/items?status=scheduled");
+  assert.deepEqual(scheduled.data.items.map(x=>x.id),[a.id]);
+  assert.equal(scheduled.data.items[0].display_status,"scheduled");
+  assert.equal(scheduled.data.items[0].simulation_state,"simulated_scheduled");
+  assert.equal(scheduled.data.items[0].status,"approved");
+  assert.equal(scheduled.data.items[0].publication_state,"held");
+  assert.equal(scheduled.data.stats.scheduled,1);
+  assert.equal(scheduled.data.stats.approved,1);
+  assert.equal((await h.call("/api/dry-run",payload(a.id,"published"))).status,200);
+  const published=await h.call("/api/items?status=published");
+  assert.deepEqual(published.data.items.map(x=>x.id),[a.id]);
+  assert.equal(published.data.items[0].display_status,"published");
+  assert.equal(published.data.items[0].simulation_state,"simulated_published");
+  assert.equal(published.data.items[0].postiz_post_id,null);
+  assert.equal(published.data.stats.published,1);
+  assert.equal(published.data.stats.scheduled||0,0);
+  assert.deepEqual((await h.call("/api/items?status=approved")).data.items.map(x=>x.id),[b.id]);
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs WHERE status!='held' OR postiz_post_id IS NOT NULL").get().n,0);
+ }finally{h.close()}
+});
+test("simulated failure/uncertainty appear in Issues and can reconcile without resending",async()=>{
+ const h=createHarness();try{
+  const a=h.addImage("issuesbatch20261112",0),b=h.addImage("issuesbatch20261112",1);
+  await h.call("/api/items?status=pending");
+  const payload=(id,action)=>({method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},body:JSON.stringify({id,action})});
+  for(const x of [a,b]){await h.decision(x.id,"approved");await h.call("/api/dry-run",payload(x.id,"prepare"));}
+  await h.call("/api/dry-run",payload(a.id,"failed"));
+  await h.call("/api/dry-run",payload(b.id,"uncertain"));
+  const issues=await h.call("/api/items?status=error");
+  assert.deepEqual(issues.data.items.map(x=>x.id),[a.id,b.id]);
+  assert.equal(issues.data.stats.error,2);
+  await h.call("/api/dry-run",payload(b.id,"verified_scheduled"));
+  assert.deepEqual((await h.call("/api/items?status=scheduled")).data.items.map(x=>x.id),[b.id]);
+  assert.deepEqual((await h.call("/api/items?status=error")).data.items.map(x=>x.id),[a.id]);
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs WHERE status!='held' OR postiz_post_id IS NOT NULL").get().n,0);
+ }finally{h.close()}
+});

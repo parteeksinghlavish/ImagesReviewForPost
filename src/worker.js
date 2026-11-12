@@ -75,8 +75,11 @@ function render(){
  $('hint').textContent=state.tab==='pending'?'Swipe left to reject · Swipe right to approve':'Review history · images remain private';
  if(!item){$('stage').innerHTML='<div class="empty"><div class="symbol">✦</div><h2>'+(state.tab==='pending'?'All reviewed':'Nothing here yet')+'</h2><p>'+(state.tab==='pending'?'New images will appear here after the generation workflow uploads them to private R2 storage.':'No images with this status yet.')+'</p></div>';return}
  const img=item.status==='rejected'?'<div style="height:100%;display:grid;place-items:center;color:#777985;font-size:13px">Image deleted from storage</div>':'<img loading="eager" draggable="false" alt="Image awaiting review" src="/media/'+encodeURIComponent(item.object_key)+'"/>';
- $('stage').innerHTML='<article class="review" id="review">'+img+'<span class="tag">'+escape(labels[item.status]||item.status)+'</span><span class="stamp reject" id="rStamp">REJECT</span><span class="stamp approve" id="aStamp">APPROVE</span><div class="card-footer"><div><strong>Image '+(item.image_index+1)+' of 4</strong><p>Batch '+escape(item.batch_id.slice(0,12))+' · '+escape(item.status)+(item.planned_at?' · HOLD · '+new Date(item.planned_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'')+'</p></div><span style="font-size:12px;color:#ccc">'+(state.index+1)+' / '+n+'</span></div></article>';
- if(state.tab==='approved'){
+ const simulated=item.status==='approved' && item.publication_state==='held' && !!item.simulation_state;
+ const cardLabel=simulated?'SIMULATED · '+escape(labels[item.display_status]||item.display_status).toUpperCase():escape(labels[item.display_status]||item.display_status||item.status);
+ const cardDetail=simulated?'Simulated: '+escape(item.simulation_state.replace('simulated_',''))+' · REAL: HELD · NO INSTAGRAM POST':escape(item.status);
+ $('stage').innerHTML='<article class="review" id="review">'+img+'<span class="tag">'+cardLabel+'</span><span class="stamp reject" id="rStamp">REJECT</span><span class="stamp approve" id="aStamp">APPROVE</span><div class="card-footer"><div><strong>Image '+(item.image_index+1)+' of 4</strong><p>Batch '+escape(item.batch_id.slice(0,12))+' · '+cardDetail+(item.planned_at?' · PLANNED '+new Date(item.planned_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'')+'</p></div><span style="font-size:12px;color:#ccc">'+(state.index+1)+' / '+n+'</span></div></article>';
+ if(item.status==='approved' && (state.tab==='approved' || simulated && ['scheduled','error'].includes(state.tab))){
   const panel=document.createElement('div');
   panel.style.cssText='margin:13px 0 0;padding:13px;border:1px solid #363944;border-radius:12px;background:#15161c;display:flex;flex-direction:column;align-items:center;gap:9px';
   const heading=document.createElement('strong');
@@ -94,7 +97,9 @@ function render(){
    button.addEventListener('click',async()=>{
     if(state.busy)return;state.busy=true;button.disabled=true;
     try{const result=await api('/api/dry-run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,action})});
-     toast('Simulation: '+result.simulation_state.replace('simulated_',''));await load();
+     toast('Simulation: '+result.simulation_state.replace('simulated_',''));
+     state.tab=result.simulation_state==='simulated_scheduled'?'scheduled':result.simulation_state==='simulated_published'?'published':'error';
+     await load();
     }catch(e){toast(e.message)}finally{state.busy=false;button.disabled=false}
    });
    buttons.appendChild(button);
@@ -158,9 +163,19 @@ async function sync(env) {
   } while (cursor && all.length < 3000);
   if (all.length) for(let i=0;i<all.length;i+=100) await env.DB.batch(all.slice(i,i+100));
 }
+// UI statuses are a view over simulated outcomes, never real Postiz state.
+const viewFromSQL = "FROM image_reviews i LEFT JOIN publication_jobs j ON j.image_id=i.id LEFT JOIN cleanup_jobs c ON c.image_id=i.id LEFT JOIN publication_simulations d ON d.image_id=i.id";
+const viewStatusSQL = `CASE
+ WHEN i.status='error' OR c.status='failed' OR j.status IN ('failed','uncertain') THEN 'error'
+ WHEN j.status='published' OR i.status='published' THEN 'published'
+ WHEN j.status='scheduled' OR i.status='scheduled' THEN 'scheduled'
+ WHEN i.status='approved' AND j.status='held' AND d.status='simulated_scheduled' THEN 'scheduled'
+ WHEN i.status='approved' AND j.status='held' AND d.status='simulated_published' THEN 'published'
+ WHEN i.status='approved' AND j.status='held' AND d.status IN ('simulated_failed','simulated_uncertain') THEN 'error'
+ ELSE i.status END`;
 async function stats(env) {
- const s=await queueStats(env);
- return {...s.reviews,error:(s.reviews.error||0)+s.cleanup_failures+(s.publication.failed||0)+(s.publication.uncertain||0)};
+ const r=await env.DB.prepare("SELECT "+viewStatusSQL+" AS view_status,COUNT(*) AS n "+viewFromSQL+" GROUP BY "+viewStatusSQL).all();
+ return Object.fromEntries((r.results||[]).map(x=>[x.view_status,x.n]));
 }
 export default {
  async fetch(req,env) {
@@ -178,10 +193,8 @@ export default {
     await sync(env);
     const status=u.searchParams.get("status")||"pending";
     if(!["pending","approved","rejected","scheduling","scheduled","published","error"].includes(status))return json({error:"Invalid status"},400);
-    const filter=status==="error" ? "(i.status='error' OR c.status='failed' OR j.status IN ('failed','uncertain'))" : "i.status=?";
-    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,j.publish_at AS planned_at,d.status AS simulation_state,d.mock_post_id AS simulated_post_id,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error FROM image_reviews i LEFT JOIN publication_jobs j ON j.image_id=i.id LEFT JOIN cleanup_jobs c ON c.image_id=i.id LEFT JOIN publication_simulations d ON d.image_id=i.id WHERE "+filter+" ORDER BY i.created_at ASC,i.image_index ASC LIMIT 200";
-    const stmt=env.DB.prepare(sql);
-    const items=status==="error" ? await stmt.all() : await stmt.bind(status).all();
+    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,("+viewStatusSQL+") AS display_status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,j.publish_at AS planned_at,d.status AS simulation_state,d.mock_post_id AS simulated_post_id,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error "+viewFromSQL+" WHERE ("+viewStatusSQL+")=? ORDER BY i.created_at ASC,i.image_index ASC LIMIT 200";
+    const items=await env.DB.prepare(sql).bind(status).all();
     return json({items:items.results||[],stats:await stats(env),publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only"});
    }
    if(req.method==="GET"&&path==="/api/jobs") {

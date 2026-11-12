@@ -77,3 +77,7 @@ Use **Simulate published / failed / uncertain** to exercise reconciliation. Unce
 `GET /api/simulations` lists dry-run results, and `POST /api/dry-run` accepts owner-authenticated, same-origin JSON `{id,action}`, with actions `prepare`, `published`, `failed`, `uncertain` or `verified_scheduled`. These are simulations, **not actual Instagram results**.
 
 The strict `LIVE_POSTING_ENABLED=false` guard remains in place. Future real Postiz upload and schedule adapters, status polling and uncertain-result recovery require a separate reviewed integration and explicit permission to activate publishing.
+
+### Where simulated posts appear
+
+Dry-run cards move between **Approved → Scheduled → Published** (or **Issues** for simulated failed/uncertain outcomes). Scheduled/Published cards are explicitly marked **SIMULATED** and **REAL: HELD · NO INSTAGRAM POST**. This changes display filtering only; the actual Postiz jobs remain held and nothing is sent to Instagram. An uncertain mock outcome may be verified without resending.
