@@ -291,3 +291,92 @@ test("simulated failure/uncertainty appear in Issues and can reconcile without r
   assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs WHERE status!='held' OR postiz_post_id IS NOT NULL").get().n,0);
  }finally{h.close()}
 });
+
+test("calendar keeps independent held slots and reschedule/cancel/restore never contacts Postiz",async()=>{
+ const h=createHarness();try{
+  const one=h.addImage("calendarbatch20261112",0),two=h.addImage("calendarbatch20261112",1);
+  await h.call("/api/items?status=pending");
+  const a=await h.decision(one.id,"approved"),b=await h.decision(two.id,"approved");
+  assert.equal(a.status,200);assert.equal(b.status,200);
+  const slot=new Date(Date.now()+6*86400000).toISOString().slice(0,16)+":00Z";
+  const future=new Date(Date.now()+9*86400000).toISOString().slice(0,16)+":00Z";
+  const act=(id,action,publish_at,expected_at)=>h.call("/api/slot",{
+   method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},
+   body:JSON.stringify({id,action,publish_at,expected_at})
+  });
+  const unauthorized=await worker.fetch(new Request("https://review.titanrigs.com/api/slot",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:one.id,action:"cancel"})}),h.env);
+  assert.equal(unauthorized.status,403);
+  const changed=await act(one.id,"reschedule",slot,a.data.planned_at);
+  assert.equal(changed.status,200);
+  assert.equal(changed.data.status,"held");assert.equal(changed.data.planned_at,slot);
+  assert.equal(changed.data.publishing_enabled,false);
+  assert.equal(h.db.prepare("SELECT publish_at FROM publication_jobs WHERE image_id=?").get(one.id).publish_at,slot);
+  const stale=await act(one.id,"reschedule",future,a.data.planned_at);
+  assert.equal(stale.status,409);
+  const conflicting=await act(two.id,"reschedule",slot,b.data.planned_at);
+  assert.equal(conflicting.status,409);
+  // Newly scheduled times are uniquely held and appear on the IST calendar.
+  const month=new Date(Date.parse(slot)+330*60000).toISOString().slice(0,7);
+  const cal=await h.call("/api/calendar?month="+month);
+  assert.equal(cal.status,200);
+  assert.equal(cal.data.timezone,"Asia/Kolkata");
+  assert.ok(cal.data.items.some(x=>x.image_id===one.id&&x.publish_at===slot));
+  assert.equal(cal.data.publishing_enabled,false);
+  const cancel=await act(one.id,"cancel",undefined,slot);
+  assert.equal(cancel.status,200);
+  assert.equal(cancel.data.status,"cancelled");
+  assert.equal(cancel.data.manifest_state,"deleted");
+  assert.ok(h.media.has(one.key));
+  assert.ok(!h.media.has("review/held/"+one.id+".json"));
+  assert.equal(h.db.prepare("SELECT status FROM publication_jobs WHERE image_id=?").get(one.id).status,"cancelled");
+  const idem=await act(one.id,"cancel");
+  assert.equal(idem.data.duplicate,true);
+  const approved=await h.call("/api/items?status=approved");
+  assert.equal(approved.data.items.find(x=>x.id===one.id).planned_at,null);
+  const again=await h.call("/api/calendar?month="+month);
+  assert.ok(!again.data.items.some(x=>x.image_id===one.id));
+  const restored=await act(one.id,"restore",future,slot);
+  assert.equal(restored.status,200);
+  assert.equal(restored.data.status,"held");assert.equal(restored.data.planned_at,future);
+  assert.ok(h.media.has("review/held/"+one.id+".json"));
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM review_events WHERE image_id=? AND event LIKE 'slot_%'").get(one.id).n,3);
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_jobs WHERE postiz_post_id IS NOT NULL OR status NOT IN ('held')").get().n,0);
+ }finally{h.close()}
+});
+test("editing a held slot invalidates stale mock publication but does not touch real state",async()=>{
+ const h=createHarness();try{
+  const x=h.addImage("simulationedit20261112",3);
+  await h.call("/api/items?status=pending");
+  const yes=await h.decision(x.id,"approved");
+  const body=(path,data)=>h.call(path,{method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},body:JSON.stringify(data)});
+  await body("/api/dry-run",{id:x.id,action:"prepare"});
+  await body("/api/dry-run",{id:x.id,action:"published"});
+  assert.equal((await h.call("/api/items?status=published")).data.items.length,1);
+  const later=new Date(Date.now()+10*86400000).toISOString().slice(0,16)+":00Z";
+  const edited=await body("/api/slot",{id:x.id,action:"reschedule",publish_at:later,expected_at:yes.data.planned_at});
+  assert.equal(edited.status,200);
+  assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM publication_simulations").get().n,0);
+  assert.equal((await h.call("/api/items?status=published")).data.items.length,0);
+  assert.equal((await h.call("/api/items?status=approved")).data.items.length,1);
+  const real=h.db.prepare("SELECT status,postiz_post_id FROM publication_jobs WHERE image_id=?").get(x.id);
+  assert.deepEqual(real,{status:"held",postiz_post_id:null});
+ }finally{h.close()}
+});
+test("failed held-manifest deletion is retried by maintenance without removing approved JPEG",async()=>{
+ const h=createHarness();try{
+  const item=h.addImage("cancelretry20261112",2);
+  await h.call("/api/items?status=pending");
+  const yes=await h.decision(item.id,"approved");
+  h.setFailDeletes(1);
+  const result=await h.call("/api/slot",{method:"POST",headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},body:JSON.stringify({id:item.id,action:"cancel",expected_at:yes.data.planned_at})});
+  assert.equal(result.status,200);assert.equal(result.data.manifest_state,"retry_pending");
+  assert.ok(h.db.prepare("SELECT last_error FROM publication_jobs WHERE image_id=?").get(item.id).last_error.startsWith("Manifest cleanup:"));
+  let wait;
+  await worker.scheduled({},h.env,{waitUntil:p=>{wait=p}});
+  await wait;
+  assert.equal(h.db.prepare("SELECT last_error FROM publication_jobs WHERE image_id=?").get(item.id).last_error,null);
+  assert.ok(!h.media.has("review/held/"+item.id+".json"));
+  assert.ok(h.media.has(item.key));
+  assert.equal(h.db.prepare("SELECT COUNT(*) n FROM publication_jobs WHERE status='cancelled'").get().n,1);
+ }finally{h.close()}
+});
