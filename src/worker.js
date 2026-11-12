@@ -2,6 +2,7 @@
 import { reviewDecision, maintenance, queueStats, retryFailedCleanup } from "./operations.js";
 import { LIVE_POSTING_ENABLED } from "./queue.js";
 import { reconcileHeldManifests } from "./manifest.js";
+import { listCalendar, manageHeldSlot, retryCancelledManifestCleanup } from "./schedule.js";
 import { dryRunAction } from "./dry-run.js";
 const HOME = "review.titanrigs.com";
 // Owner identity is injected as the Cloudflare OWNER_EMAIL runtime secret.
@@ -192,10 +193,23 @@ export default {
    if(req.method==="GET"&&path==="/api/items") {
     await sync(env);
     const status=u.searchParams.get("status")||"pending";
-    if(!["pending","approved","rejected","scheduling","scheduled","published","error"].includes(status))return json({error:"Invalid status"},400);
-    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,("+viewStatusSQL+") AS display_status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,j.publish_at AS planned_at,d.status AS simulation_state,d.mock_post_id AS simulated_post_id,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error "+viewFromSQL+" WHERE ("+viewStatusSQL+")=? ORDER BY i.created_at ASC,i.image_index ASC LIMIT 200";
-    const items=await env.DB.prepare(sql).bind(status).all();
-    return json({items:items.results||[],stats:await stats(env),publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only"});
+    if(!["all","pending","approved","rejected","scheduling","scheduled","published","error"].includes(status))return json({error:"Invalid status"},400);
+    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,("+viewStatusSQL+") AS display_status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,CASE WHEN j.status='cancelled' THEN NULL ELSE j.publish_at END AS planned_at,d.status AS simulation_state,d.mock_post_id AS simulated_post_id,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error "+viewFromSQL+(status==="all"?"":" WHERE ("+viewStatusSQL+")=?")+" ORDER BY i.created_at DESC,i.image_index ASC LIMIT 200";
+    const items=status==="all"?await env.DB.prepare(sql).all():await env.DB.prepare(sql).bind(status).all();
+    return json({items:items.results||[],stats:await stats(env),publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only",limit:200});
+   }
+   if(req.method==="GET"&&path==="/api/calendar") {
+    try{return json(await listCalendar(env,u.searchParams.get("month")))}
+    catch(error){if(error?.status===400)return json({error:error.message},400);throw error}
+   }
+   if(req.method==="POST"&&path==="/api/slot") {
+    if(req.headers.get("Origin")!=="https://"+HOME)return json({error:"Origin not allowed"},403);
+    if(!String(req.headers.get("Content-Type")||"").startsWith("application/json"))return json({error:"JSON required"},415);
+    if(Number(req.headers.get("Content-Length")||0)>1024)return json({error:"Body too large"},413);
+    const raw=await req.text();if(raw.length>1024)return json({error:"Body too large"},413);
+    let payload;try{payload=JSON.parse(raw)}catch{return json({error:"Invalid JSON"},400)}
+    try{return json(await manageHeldSlot(env,payload))}
+    catch(error){if([400,409].includes(error?.status))return json({error:error.message},error.status);throw error}
    }
    if(req.method==="GET"&&path==="/api/jobs") {
     const r=await env.DB.prepare("SELECT j.image_id,j.publish_at,j.status,j.attempts,j.next_attempt_at,j.postiz_post_id,j.provider_status,j.last_error,j.created_at,i.batch_id,i.image_index FROM publication_jobs j JOIN image_reviews i ON i.id=j.image_id ORDER BY j.publish_at ASC LIMIT 200").all();
@@ -253,6 +267,6 @@ export default {
  },
  async scheduled(controller,env,ctx) {
   // Periodic cleanup only. Never dispatch held posts to Postiz/Instagram.
-  ctx.waitUntil((async()=>{await sync(env);const cleanup=await maintenance(env);const held=await reconcileHeldManifests(env);return {cleanup,held}})().then(result=>console.log("review maintenance",JSON.stringify(result))).catch(e=>console.error("review maintenance failed",String(e))));
+  ctx.waitUntil((async()=>{await sync(env);const cleanup=await maintenance(env);const held=await reconcileHeldManifests(env);const cancelledManifests=await retryCancelledManifestCleanup(env);return {cleanup,held,cancelledManifests}})().then(result=>console.log("review maintenance",JSON.stringify(result))).catch(e=>console.error("review maintenance failed",String(e))));
  }
 };
