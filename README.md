@@ -87,7 +87,7 @@ Dry-run cards move between **Approved → Scheduled → Published** (or **Issues
 The review interface now provides:
 
 - **Pending**: swipe right to approve or left to reject, one image at a time.
-- **All**: browse the full recent review queue (up to 200 items in this version), including approved, rejected, held and simulated results.
+- **All**: browse the full recent review queue (up to 200 items in this version), including active approvals, held plans and simulated results. Successfully deleted rejected cards are excluded.
 - **Approved / Scheduled / Published / Issues**: use Previous/Next, left/right arrow keys and the thumbnail filmstrip to navigate records. A simulated published image moves out of Approved into Published and is prominently marked SIMULATED; its real job stays HELD.
 - **Image activity**: authenticated event history for each image, including approval, manifest staging, simulated publication states and held-slot changes.
 - **Calendar**: mobile-friendly month grid and agenda for approved HELD posting reservations. Times are shown in **Asia/Kolkata (IST)**; select an event to inspect its image.
@@ -103,3 +103,7 @@ All of these are **internal scheduling plans only**. Postiz and Instagram are ne
 - Under the current D1 schema, a cancelled slot remains a unique historical reservation. New slots are allocated after existing reservations, and cancellation does not retroactively free its original timestamp. Altering this requires a deliberate database migration.
 - UI controls are validated by unit/integration tests and JavaScript syntax compilation; a full manual Android gesture/accessibility pass is still recommended.
 - No real Postiz scheduling or provider reconciliation has been tested, because live posting is intentionally disabled.
+
+### Rejected-image visibility
+
+Rejected images are deleted from private R2 and **not displayed** in the All tab, navigation filmstrip, counts or a Rejected tab. D1 decision history and cleanup records remain for auditing; this change does not delete records. Exception: a rejected image whose R2 deletion exhausts retries stays visible **only under Issues**, where manual cleanup retry is available. Once cleanup succeeds, the item disappears from the interface.

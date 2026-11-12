@@ -108,8 +108,8 @@ function page() {
 <div class="toast" role="status" id="toast"></div><div id="modalRoot"></div>
 <script>
 (()=>{'use strict';
-const TABS=['pending','all','approved','scheduled','published','rejected','error'];
-const labels={pending:'Pending',all:'All',approved:'Approved',scheduled:'Scheduled',published:'Published',rejected:'Rejected',error:'Issues'};
+const TABS=['pending','all','approved','scheduled','published','error'];
+const labels={pending:'Pending',all:'All',approved:'Approved',scheduled:'Scheduled',published:'Published',error:'Issues'};
 const state={view:'queue',tab:'pending',items:[],index:0,stats:{},busy:false,calendarMonth:null,calendarItems:[]};
 const $=id=>document.getElementById(id);
 const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -405,7 +405,9 @@ const viewStatusSQL = `CASE
  WHEN i.status='approved' AND j.status='held' AND d.status IN ('simulated_failed','simulated_uncertain') THEN 'error'
  ELSE i.status END`;
 async function stats(env) {
- const r=await env.DB.prepare("SELECT "+viewStatusSQL+" AS view_status,COUNT(*) AS n "+viewFromSQL+" GROUP BY "+viewStatusSQL).all();
+ // Deleted rejected items are not part of the visible queue. Failed R2 deletion
+ // remains visible as an actionable Issues item until cleanup can succeed.
+ const r=await env.DB.prepare("SELECT "+viewStatusSQL+" AS view_status,COUNT(*) AS n "+viewFromSQL+" WHERE i.status<>'rejected' OR c.status='failed' GROUP BY "+viewStatusSQL).all();
  return Object.fromEntries((r.results||[]).map(x=>[x.view_status,x.n]));
 }
 export default {
@@ -423,8 +425,8 @@ export default {
    if(req.method==="GET"&&path==="/api/items") {
     await sync(env);
     const status=u.searchParams.get("status")||"pending";
-    if(!["all","pending","approved","rejected","scheduling","scheduled","published","error"].includes(status))return json({error:"Invalid status"},400);
-    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,("+viewStatusSQL+") AS display_status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,CASE WHEN j.status='cancelled' THEN NULL ELSE j.publish_at END AS planned_at,d.status AS simulation_state,d.mock_post_id AS simulated_post_id,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error "+viewFromSQL+(status==="all"?"":" WHERE ("+viewStatusSQL+")=?")+" ORDER BY i.created_at DESC,i.image_index ASC LIMIT 200";
+    if(!["all","pending","approved","scheduling","scheduled","published","error"].includes(status))return json({error:"Invalid status"},400);
+    const sql="SELECT i.id,i.object_key,i.batch_id,i.image_index,i.status,("+viewStatusSQL+") AS display_status,i.created_at,i.decided_at,i.scheduled_at,i.postiz_post_id,i.last_error,CASE WHEN j.status='cancelled' THEN NULL ELSE j.publish_at END AS planned_at,d.status AS simulation_state,d.mock_post_id AS simulated_post_id,j.status AS publication_state,j.attempts AS publication_attempts,j.last_error AS publication_error,c.status AS cleanup_state,c.last_error AS cleanup_error "+viewFromSQL+(status==="all"?" WHERE i.status<>'rejected'":status==="error"?" WHERE ("+viewStatusSQL+")=? AND (i.status<>'rejected' OR c.status='failed')":" WHERE ("+viewStatusSQL+")=? AND i.status<>'rejected'")+" ORDER BY i.created_at DESC,i.image_index ASC LIMIT 200";
     const items=status==="all"?await env.DB.prepare(sql).all():await env.DB.prepare(sql).bind(status).all();
     return json({items:items.results||[],stats:await stats(env),publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only",limit:200});
    }

@@ -381,3 +381,46 @@ test("failed held-manifest deletion is retried by maintenance without removing a
   assert.equal(h.db.prepare("SELECT COUNT(*) n FROM publication_jobs WHERE status='cancelled'").get().n,1);
  }finally{h.close()}
 });
+
+test("deleted rejected cards are hidden from All and cannot be loaded by Rejected filter",async()=>{
+ const h=createHarness();try{
+  const rejected=h.addImage("hiddenreject20261112",0);
+  const kept=h.addImage("hiddenreject20261112",1);
+  await h.call("/api/items?status=pending");
+  const no=await h.decision(rejected.id,"rejected");
+  const yes=await h.decision(kept.id,"approved");
+  assert.equal(no.status,200);assert.equal(yes.status,200);
+  assert.equal(h.media.has(rejected.key),false);
+  const all=await h.call("/api/items?status=all");
+  assert.equal(all.status,200);
+  assert.deepEqual(all.data.items.map(x=>x.id),[kept.id]);
+  assert.equal(all.data.stats.rejected,undefined);
+  const invalid=await h.call("/api/items?status=rejected");
+  assert.equal(invalid.status,400);
+  const recorded=h.db.prepare("SELECT status FROM image_reviews WHERE id=?").get(rejected.id);
+  assert.equal(recorded.status,"rejected");
+  assert.equal(h.db.prepare("SELECT status FROM cleanup_jobs WHERE image_id=?").get(rejected.id).status,"complete");
+ }finally{h.close()}
+});
+test("failed rejected-object cleanup stays actionable in Issues but is absent from All",async()=>{
+ const h=createHarness();try{
+  const bad=h.addImage("brokenreject20261112",2);
+  await h.call("/api/items?status=pending");
+  h.setFailDeletes(5);
+  assert.equal((await h.decision(bad.id,"rejected")).status,200);
+  for(let n=0;n<4;n++)await processRejectionCleanup(h.env,bad.id);
+  const issues=await h.call("/api/items?status=error");
+  assert.equal(issues.status,200);
+  assert.deepEqual(issues.data.items.map(x=>x.id),[bad.id]);
+  assert.equal(issues.data.items[0].cleanup_state,"failed");
+  assert.deepEqual((await h.call("/api/items?status=all")).data.items,[]);
+  assert.equal(issues.data.stats.error,1);
+  const retry=await h.call("/api/cleanup/retry",{method:"POST",
+   headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},
+   body:JSON.stringify({id:bad.id})});
+  assert.equal(retry.status,200);assert.equal(retry.data.cleanup,"complete");
+  const cleared=await h.call("/api/items?status=error");
+  assert.equal(cleared.data.items.length,0);
+  assert.equal(cleared.data.stats.error,undefined);
+ }finally{h.close()}
+});

@@ -14,6 +14,8 @@ test("review HTML contains queue browsing, calendar, slot and history controls a
   assert.ok(html.includes('id="'+id+'"'),"Missing UI control "+id);
  }
  assert.match(html,/No real Postiz or Instagram requests/);
+ assert.match(html,/const TABS=\['pending','all','approved','scheduled','published','error'\]/);
+ assert.doesNotMatch(html,/rejected:'Rejected'/);
  assert.match(html,/Change held slot/);
  assert.match(html,/Reserve new slot/);
  assert.match(html,/View history/);
