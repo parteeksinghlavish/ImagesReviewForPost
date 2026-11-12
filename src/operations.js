@@ -12,7 +12,7 @@ const approveSQL = [
   `INSERT INTO publication_jobs(image_id,publish_at,status)
     SELECT id, strftime('%Y-%m-%dT%H:%M:%SZ',
        max(unixepoch(?),
-         coalesce((SELECT max(unixepoch(publish_at))+86400 FROM publication_jobs WHERE status<>'cancelled'),0)),
+         coalesce((SELECT max(unixepoch(publish_at))+86400 FROM publication_jobs),0)),
        'unixepoch'), 'held'
     FROM image_reviews WHERE id=? AND status='approved'
       AND NOT EXISTS (SELECT 1 FROM publication_jobs WHERE image_id=?)`,
