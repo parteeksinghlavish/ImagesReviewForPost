@@ -1,18 +1,20 @@
 // Pure scheduling rules. Deliberately no Postiz or Instagram API calls.
 export const LIVE_POSTING_ENABLED = false;
 export const DEFAULT_TZ = "Asia/Kolkata";
+export const SLOT_HOURS_IST = [0, 6, 12, 18];
 export const SLOT_HOUR_IST = 18;
 export const SLOT_MINUTE_IST = 0;
-export const SLOT_GAP_SECONDS = 86400;
+export const SLOT_GAP_SECONDS = 6 * 3600;
 export const MAX_CLEANUP_ATTEMPTS = 5;
 
-export function firstPostingSlot(now = new Date(), leadMs = 60 * 60 * 1000) {
+export function firstPostingSlot(now = new Date(), leadMs = 2 * 60 * 60 * 1000) {
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
   if (!Number.isFinite(nowMs)) throw new TypeError("Invalid current time");
   const earliest = nowMs + leadMs;
-  const ist = new Date(earliest + 330 * 60 * 1000);
-  let slotMs = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), 12, 30, 0);
-  if (slotMs < earliest) slotMs += 86400000;
+  // UTC+05:30 has no DST: align future posting to 00/06/12/18 IST.
+  const gapMs = SLOT_GAP_SECONDS * 1000;
+  const offsetMs = 330 * 60 * 1000;
+  const slotMs = Math.ceil((earliest + offsetMs) / gapMs) * gapMs - offsetMs;
   return new Date(slotMs).toISOString().replace(".000Z", "Z");
 }
 
