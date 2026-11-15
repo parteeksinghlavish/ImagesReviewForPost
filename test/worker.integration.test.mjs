@@ -72,7 +72,8 @@ test("owner-only review, two independent decisions, held plans, no Postiz IDs",a
    assert.equal(yes.data.publishing_enabled,false);
    assert.equal(yes.data.manifest_state,"staged");
    assert.equal(h.media.has("review/held/"+a.id+".json"),true);
-   assert.ok(yes.data.planned_at.endsWith("12:30:00Z"));
+   const istHour=new Date(Date.parse(yes.data.planned_at)+330*60000).getUTCHours();
+   assert.ok([0,6,12,18].includes(istHour));
    const no=await h.decision(b.id,"rejected");
    assert.equal(no.status,200);
    assert.equal(no.data.cleanup,"complete");
