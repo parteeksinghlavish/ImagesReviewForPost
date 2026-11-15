@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import worker from "../src/worker.js";
 import { processRejectionCleanup } from "../src/operations.js";
 import { reconcilePostizReceipts } from "../src/receipts.js";
+import { reconcilePostizStatuses } from "../src/status.js";
 import { getPublishingConfig, writeHeldManifest } from "../src/manifest.js";
 
 const SCHEMA=readFileSync(new URL("../database/schema.sql", import.meta.url),"utf8");
@@ -487,5 +488,59 @@ test("dispatch claim prevents cancel/reschedule until Postiz outcome reconciled"
    assert.equal(r.status,409);
   }
   assert.equal(h.db.prepare("SELECT status FROM publication_jobs WHERE image_id=?").get(image.id).status,"held");
+ }finally{h.close()}
+});
+
+test("Postiz provider statuses update only receipt-confirmed scheduled images",async()=>{
+ const h=createHarness();try{
+  const item=h.addImage("publishstate20261115",2);
+  await h.call("/api/items?status=pending");
+  const approved=await h.decision(item.id,"approved");
+  const postId="postiz_realtest_001";
+  const receipt={version:1,status:"scheduled",image_id:item.id,postiz_post_id:postId,
+   publish_at:approved.data.planned_at,integration_id:"cmwakcjhq0001r46r8j756ym8",
+   profile:"discoverxploration",platform:"instagram",kind:"single_image"};
+  await h.env.PENDING.put("review/receipts/"+item.id+".json",JSON.stringify(receipt));
+  assert.equal((await reconcilePostizReceipts(h.env)).scheduled,1);
+  const snap={version:1,integration_id:"cmwakcjhq0001r46r8j756ym8",
+   profile:"discoverxploration",collected_at:new Date().toISOString(),
+   posts:[{postiz_post_id:postId,provider_state:"QUEUE",publish_at:approved.data.planned_at}]};
+  await h.env.PENDING.put("review/status/discoverxploration.json",JSON.stringify(snap));
+  assert.equal((await reconcilePostizStatuses(h.env)).still_scheduled,1);
+  snap.posts[0].provider_state="PUBLISHED";
+  await h.env.PENDING.put("review/status/discoverxploration.json",JSON.stringify(snap));
+  assert.equal((await reconcilePostizStatuses(h.env)).published,1);
+  assert.equal(h.db.prepare("SELECT status FROM publication_jobs WHERE image_id=?").get(item.id).status,"published");
+  assert.equal(h.db.prepare("SELECT status FROM image_reviews WHERE id=?").get(item.id).status,"published");
+  assert.equal((await h.call("/api/items?status=published")).data.items.length,1);
+  assert.equal((await reconcilePostizStatuses(h.env)).published,0);
+  assert.equal(h.db.prepare("SELECT COUNT(*) n FROM review_events WHERE image_id=? AND event='postiz_published'").get(item.id).n,1);
+ }finally{h.close()}
+});
+test("wrong-account and stale Postiz snapshots never mutate scheduled jobs",async()=>{
+ const h=createHarness();try{
+  const item=h.addImage("invalidstate20261115",1);
+  await h.call("/api/items?status=pending");
+  const a=await h.decision(item.id,"approved");
+  const postId="postiz_safe_002";
+  await h.env.PENDING.put("review/receipts/"+item.id+".json",JSON.stringify({
+   version:1,status:"scheduled",image_id:item.id,postiz_post_id:postId,publish_at:a.data.planned_at,
+   integration_id:"cmwakcjhq0001r46r8j756ym8",profile:"discoverxploration",platform:"instagram",kind:"single_image"
+  }));
+  await reconcilePostizReceipts(h.env);
+  const snap={version:1,integration_id:"wrong",profile:"discoverxploration",
+   collected_at:new Date().toISOString(),posts:[{postiz_post_id:postId,provider_state:"ERROR"}]};
+  await h.env.PENDING.put("review/status/discoverxploration.json",JSON.stringify(snap));
+  assert.equal((await reconcilePostizStatuses(h.env)).invalid,true);
+  snap.integration_id="cmwakcjhq0001r46r8j756ym8";
+  snap.collected_at=new Date(Date.now()-7*3600000).toISOString();
+  await h.env.PENDING.put("review/status/discoverxploration.json",JSON.stringify(snap));
+  assert.equal((await reconcilePostizStatuses(h.env)).stale,true);
+  assert.equal(h.db.prepare("SELECT status FROM publication_jobs WHERE image_id=?").get(item.id).status,"scheduled");
+  snap.collected_at=new Date().toISOString();
+  await h.env.PENDING.put("review/status/discoverxploration.json",JSON.stringify(snap));
+  assert.equal((await reconcilePostizStatuses(h.env)).failed,1);
+  assert.equal(h.db.prepare("SELECT status FROM publication_jobs WHERE image_id=?").get(item.id).status,"failed");
+  assert.equal((await h.call("/api/items?status=error")).data.items.length,1);
  }finally{h.close()}
 });

@@ -3,6 +3,7 @@ import { reviewDecision, maintenance, queueStats, retryFailedCleanup } from "./o
 import { LIVE_POSTING_ENABLED } from "./queue.js";
 import { reconcileHeldManifests, getPublishingConfig } from "./manifest.js";
 import { reconcilePostizReceipts } from "./receipts.js";
+import { reconcilePostizStatuses } from "./status.js";
 import { listCalendar, manageHeldSlot, retryCancelledManifestCleanup } from "./schedule.js";
 import { dryRunAction } from "./dry-run.js";
 const HOME = "review.titanrigs.com";
@@ -500,6 +501,6 @@ export default {
  },
  async scheduled(controller,env,ctx) {
   // Periodic cleanup only. Never dispatch held posts to Postiz/Instagram.
-  ctx.waitUntil((async()=>{await sync(env);const receipts=await reconcilePostizReceipts(env);const cleanup=await maintenance(env);const held=await reconcileHeldManifests(env);const cancelledManifests=await retryCancelledManifestCleanup(env);return {receipts,cleanup,held,cancelledManifests}})().then(result=>console.log("review maintenance",JSON.stringify(result))).catch(e=>console.error("review maintenance failed",String(e))));
+  ctx.waitUntil((async()=>{await sync(env);const receipts=await reconcilePostizReceipts(env);const provider=await reconcilePostizStatuses(env);const cleanup=await maintenance(env);const held=await reconcileHeldManifests(env);const cancelledManifests=await retryCancelledManifestCleanup(env);return {receipts,provider,cleanup,held,cancelledManifests}})().then(result=>console.log("review maintenance",JSON.stringify(result))).catch(e=>console.error("review maintenance failed",String(e))));
  }
 };
