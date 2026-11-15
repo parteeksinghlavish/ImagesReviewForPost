@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import worker from "../src/worker.js";
 import { processRejectionCleanup } from "../src/operations.js";
+import { reconcilePostizReceipts } from "../src/receipts.js";
+import { getPublishingConfig, writeHeldManifest } from "../src/manifest.js";
 
 const SCHEMA=readFileSync(new URL("../database/schema.sql", import.meta.url),"utf8");
 const OWNER="review-test@example.invalid";
@@ -423,5 +425,67 @@ test("failed rejected-object cleanup stays actionable in Issues but is absent fr
   const cleared=await h.call("/api/items?status=error");
   assert.equal(cleared.data.items.length,0);
   assert.equal(cleared.data.stats.error,undefined);
+ }finally{h.close()}
+});
+
+test("only verified DiscoverXploration configuration arms approved manifests",async()=>{
+ const h=createHarness();try{
+  const image=h.addImage("armedbatch20261115",1);
+  await h.call("/api/items?status=pending");
+  assert.equal((await h.decision(image.id,"approved")).status,200);
+  const held="review/held/"+image.id+".json";
+  assert.equal(JSON.parse(new TextDecoder().decode(h.media.get(held))).publishing_enabled,false);
+  const cfg={version:1,enabled:true,integration_id:"cmwakcjhq0001r46r8j756ym8",
+    profile:"discoverxploration",channel:"DiscoverXploration",cadence_hours:6,slots_ist:[0,6,12,18]};
+  await h.env.PENDING.put("review/config/instagram-publishing.json",JSON.stringify(cfg));
+  assert.equal((await getPublishingConfig(h.env)).enabled,true);
+  h.db.prepare("UPDATE publication_jobs SET manifest_synced_at=NULL WHERE image_id=?").run(image.id);
+  assert.equal((await writeHeldManifest(h.env,image.id)).status,"staged");
+  const data=JSON.parse(new TextDecoder().decode(h.media.get(held)));
+  assert.equal(data.publishing_enabled,true);
+  assert.equal(data.integration_id,cfg.integration_id);
+  cfg.profile="other_account";
+  await h.env.PENDING.put("review/config/instagram-publishing.json",JSON.stringify(cfg));
+  assert.equal((await getPublishingConfig(h.env)).enabled,false);
+ }finally{h.close()}
+});
+test("only matching Postiz scheduling receipts transition live D1 jobs; never duplicate",async()=>{
+ const h=createHarness();try{
+  const image=h.addImage("postizbatch20261115",2);
+  await h.call("/api/items?status=pending");
+  const reviewed=await h.decision(image.id,"approved");
+  const receipt={version:1,status:"scheduled",image_id:image.id,postiz_post_id:"postiz_test_verified_123",
+    publish_at:reviewed.data.planned_at,integration_id:"cmwakcjhq0001r46r8j756ym8",
+    profile:"discoverxploration",platform:"instagram",kind:"single_image"};
+  const key="review/receipts/"+image.id+".json";
+  await h.env.PENDING.put(key,JSON.stringify({...receipt,integration_id:"incorrect"}));
+  assert.equal((await reconcilePostizReceipts(h.env)).invalid,1);
+  assert.equal(h.db.prepare("SELECT status FROM publication_jobs WHERE image_id=?").get(image.id).status,"held");
+  await h.env.PENDING.put(key,JSON.stringify(receipt));
+  const result=await reconcilePostizReceipts(h.env);
+  assert.equal(result.scheduled,1);
+  assert.equal(result.deleted_manifests,1);
+  assert.equal(h.media.has("review/held/"+image.id+".json"),false);
+  const row=h.db.prepare("SELECT status,postiz_post_id FROM publication_jobs WHERE image_id=?").get(image.id);
+  assert.equal(row.status,"scheduled");
+  assert.equal(row.postiz_post_id,receipt.postiz_post_id);
+  assert.equal(h.db.prepare("SELECT status FROM image_reviews WHERE id=?").get(image.id).status,"scheduled");
+  assert.equal((await reconcilePostizReceipts(h.env)).already_synced,1);
+  assert.equal(h.db.prepare("SELECT COUNT(*) n FROM review_events WHERE image_id=? AND event='postiz_scheduled'").get(image.id).n,1);
+ }finally{h.close()}
+});
+test("dispatch claim prevents cancel/reschedule until Postiz outcome reconciled",async()=>{
+ const h=createHarness();try{
+  const image=h.addImage("claimedbatch20261115",0);
+  await h.call("/api/items?status=pending");
+  const reviewed=await h.decision(image.id,"approved");
+  await h.env.PENDING.put("review/claims/"+image.id+".json",JSON.stringify({state:"dispatching"}));
+  for(const action of ["cancel","reschedule"]){
+   const r=await h.call("/api/slot",{method:"POST",
+    headers:{Origin:"https://review.titanrigs.com","Content-Type":"application/json"},
+    body:JSON.stringify({id:image.id,action,publish_at:new Date(Date.now()+9*86400000).toISOString().slice(0,16)+":00Z",expected_at:reviewed.data.planned_at})});
+   assert.equal(r.status,409);
+  }
+  assert.equal(h.db.prepare("SELECT status FROM publication_jobs WHERE image_id=?").get(image.id).status,"held");
  }finally{h.close()}
 });

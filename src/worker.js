@@ -1,7 +1,8 @@
 
 import { reviewDecision, maintenance, queueStats, retryFailedCleanup } from "./operations.js";
 import { LIVE_POSTING_ENABLED } from "./queue.js";
-import { reconcileHeldManifests } from "./manifest.js";
+import { reconcileHeldManifests, getPublishingConfig } from "./manifest.js";
+import { reconcilePostizReceipts } from "./receipts.js";
 import { listCalendar, manageHeldSlot, retryCancelledManifestCleanup } from "./schedule.js";
 import { dryRunAction } from "./dry-run.js";
 const HOME = "review.titanrigs.com";
@@ -16,7 +17,7 @@ const securityHeaders = {
 function json(value, status = 200) {
   return new Response(JSON.stringify(value), {status, headers: {...securityHeaders, "Content-Type":"application/json; charset=utf-8"}});
 }
-function page() {
+function page(publishingEnabled=false) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 <meta name="theme-color" content="#0a0b0e"/><meta name="mobile-web-app-capable" content="yes"/>
@@ -89,7 +90,7 @@ function page() {
 @media(min-width:480px){.daycell{min-height:85px}}
 </style></head>
 <body><main class="shell">
-<header class="top"><div class="brand"><div class="mark">✦</div><span>SOCIAL STUDIO<span style="color:#777986"> / REVIEW</span></span></div><div class="env" style="color:#e6cc8c;border-color:#72613e">Publishing paused</div></header>
+<header class="top"><div class="brand"><div class="mark">✦</div><span>SOCIAL STUDIO<span style="color:#777986"> / REVIEW</span></span></div><div class="env" style="color:#e6cc8c;border-color:#72613e">${publishingEnabled ? "Posting to @discoverxploration" : "Publishing paused"}</div></header>
 <section class="titlebar"><div><div class="eyebrow">Creative approval</div><h1>Review queue</h1></div><div class="count" id="counter">—</div></section>
 <div class="workspace-switch"><button type="button" id="queueView" class="selected">◫ Image queue</button><button type="button" id="calendarView">▦ Calendar</button></div>
 <nav class="tabs" id="tabs" aria-label="Review filters"></nav>
@@ -104,7 +105,7 @@ function page() {
 <div class="browse-nav" id="browseNav" hidden><button id="previousCard" type="button">← Previous</button><span id="browsePosition">1 / 1</span><button id="nextCard" type="button">Next →</button></div>
 <div class="filmstrip" id="filmstrip" hidden></div>
 <p class="hint" id="hint">Swipe left to reject · Swipe right to approve</p>
-<footer class="bottom"><span>DiscoverXploration · Image by image</span><strong>NO LIVE POSTS</strong></footer></main>
+<footer class="bottom"><span>DiscoverXploration · Image by image</span><strong>${publishingEnabled ? "POSTIZ ACTIVE · 6H IST" : "NO LIVE POSTS"}</strong></footer></main>
 <div class="toast" role="status" id="toast"></div><div id="modalRoot"></div>
 <script>
 (()=>{'use strict';
@@ -418,10 +419,10 @@ export default {
    const identity=(req.headers.get("Cf-Access-Authenticated-User-Email")||"").trim().toLowerCase();
    if((!env.OWNER_EMAIL || identity!==env.OWNER_EMAIL.trim().toLowerCase())) return new Response("Access denied",{status:403,headers:securityHeaders});
    const path=u.pathname;
-   if(req.method==="GET"&&path==="/")return new Response(page(),{headers:{...securityHeaders,"Content-Type":"text/html; charset=utf-8","Content-Security-Policy":"default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'"}});
+   if(req.method==="GET"&&path==="/")return new Response(page((await getPublishingConfig(env)).enabled),{headers:{...securityHeaders,"Content-Type":"text/html; charset=utf-8","Content-Security-Policy":"default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'"}});
    if(req.method==="GET"&&path==="/manifest.webmanifest")return json({name:"Social Studio Review",short_name:"Image Review",start_url:"/",display:"standalone",background_color:"#090a0d",theme_color:"#090a0d",icons:[{src:"/icon.svg",type:"image/svg+xml",sizes:"any",purpose:"any"}]});
    if(req.method==="GET"&&path==="/icon.svg")return new Response('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#171a23"/><path d="m64 22 12 30 30 12-30 12-12 30-12-30-30-12 30-12Z" fill="#abb4fa"/></svg>',{headers:{...securityHeaders,"Content-Type":"image/svg+xml"}});
-   if(req.method==="GET"&&path==="/api/health")return json({ok:true,project:"social-image-review",publishing_enabled:LIVE_POSTING_ENABLED,mode:"hold_only",dry_run_enabled:true});
+   if(req.method==="GET"&&path==="/api/health"){const pub=await getPublishingConfig(env);return json({ok:true,project:"social-image-review",publishing_enabled:pub.enabled,account:"@discoverxploration",cadence_hours:6,mode:pub.enabled?"postiz_scheduling":"hold_only",dry_run_enabled:!pub.enabled});}
    if(req.method==="GET"&&path==="/api/items") {
     await sync(env);
     const status=u.searchParams.get("status")||"pending";
@@ -499,6 +500,6 @@ export default {
  },
  async scheduled(controller,env,ctx) {
   // Periodic cleanup only. Never dispatch held posts to Postiz/Instagram.
-  ctx.waitUntil((async()=>{await sync(env);const cleanup=await maintenance(env);const held=await reconcileHeldManifests(env);const cancelledManifests=await retryCancelledManifestCleanup(env);return {cleanup,held,cancelledManifests}})().then(result=>console.log("review maintenance",JSON.stringify(result))).catch(e=>console.error("review maintenance failed",String(e))));
+  ctx.waitUntil((async()=>{await sync(env);const receipts=await reconcilePostizReceipts(env);const cleanup=await maintenance(env);const held=await reconcileHeldManifests(env);const cancelledManifests=await retryCancelledManifestCleanup(env);return {receipts,cleanup,held,cancelledManifests}})().then(result=>console.log("review maintenance",JSON.stringify(result))).catch(e=>console.error("review maintenance failed",String(e))));
  }
 };

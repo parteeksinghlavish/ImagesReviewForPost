@@ -2,6 +2,7 @@
 // No fetch(), API credentials, or Postiz / Instagram side effects exist in this module.
 import { prepareSingleImagePost } from "./postiz-plan.js";
 import { LIVE_POSTING_ENABLED } from "./queue.js";
+import { getPublishingConfig } from "./manifest.js";
 
 const IMAGE_ID = /^[A-Za-z0-9_-]{8,80}-[0-3]$/;
 const STATES = new Set(["simulated_scheduled","simulated_published","simulated_failed","simulated_uncertain"]);
@@ -38,7 +39,7 @@ export function createMockPostizAdapter() {
 }
 export async function prepareDryRun(env,id) {
   validate(id);
-  if(LIVE_POSTING_ENABLED)throw problem("Dry-run cannot operate while live publishing is enabled",409);
+  if(LIVE_POSTING_ENABLED||(await getPublishingConfig(env)).enabled)throw problem("Dry-run cannot operate while live publishing is enabled",409);
   const existing=await env.DB.prepare("SELECT * FROM publication_simulations WHERE image_id=?").bind(id).first();
   if(existing)return response(existing,true);
   const row=await env.DB.prepare(`SELECT j.image_id,j.status,j.publish_at,i.object_key,i.status AS review_status
@@ -66,7 +67,7 @@ export async function prepareDryRun(env,id) {
 }
 export async function reconcileDryRun(env,id,action) {
   validate(id);
-  if(LIVE_POSTING_ENABLED)throw problem("Dry-run cannot operate while live publishing is enabled",409);
+  if(LIVE_POSTING_ENABLED||(await getPublishingConfig(env)).enabled)throw problem("Dry-run cannot operate while live publishing is enabled",409);
   const target={published:"simulated_published",failed:"simulated_failed",
     uncertain:"simulated_uncertain",verified_scheduled:"simulated_scheduled"}[action];
   if(!target||!STATES.has(target))throw problem("Unknown simulation result",400);

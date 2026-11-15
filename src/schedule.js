@@ -49,6 +49,10 @@ export async function manageHeldSlot(env,{id,action,publish_at,expected_at}={}){
   if(action==="reschedule"&&job.status!=="held")throw conflict("Only an active hold can be rescheduled");
   validateSlot(publish_at);
  }
+ // A claim is durable evidence Postiz may already have accepted the schedule.
+ // Never allow a local cancel/reschedule that might leave a live post behind.
+ if(await env.PENDING.get("review/claims/"+id+".json"))
+   throw conflict("Posting has already started; verify/cancel this image in Postiz first.");
  if(expected_at!==undefined&&expected_at!==job.publish_at)throw conflict("Schedule changed since this card was loaded; refresh");
  if(action==="reschedule"&&publish_at===job.publish_at)return {id,status:"held",planned_at:job.publish_at,duplicate:true,publishing_enabled:false};
  try {
